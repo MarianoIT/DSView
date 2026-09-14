@@ -51,6 +51,7 @@ else (LIBUSB_1_LIBRARIES AND LIBUSB_1_INCLUDE_DIRS)
     NAMES
 	    libusb.h
     PATHS
+      /opt/homebrew/include
       /usr/local/include
       /opt/local/include
       /usr/include
@@ -63,6 +64,7 @@ else (LIBUSB_1_LIBRARIES AND LIBUSB_1_INCLUDE_DIRS)
     NAMES
       usb-1.0 usb
     PATHS
+      /opt/homebrew/lib
       /usr/local/lib64
       /opt/local/lib64
       /usr/lib64

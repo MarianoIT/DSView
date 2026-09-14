@@ -19,9 +19,17 @@
 ## along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-cmake_minimum_required(VERSION 2.8.6)
+cmake_minimum_required(VERSION 3.21)
 
 project(DSView)
+
+if(APPLE)
+    # Homebrew installs native Apple Silicon packages below /opt/homebrew.
+    if(NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES arm64 CACHE STRING "macOS target architectures")
+    endif()
+    list(PREPEND CMAKE_PREFIX_PATH /opt/homebrew /opt/homebrew/opt/qt)
+endif()
 
 #===============================================================================
 #= Config Header
@@ -215,7 +223,7 @@ endif()
 #===============================================================================
 #= boost
 #-------------------------------------------------------------------------------
-find_package(Boost 1.42 QUIET)
+find_package(Boost 1.82 CONFIG QUIET)
 
 if(NOT Boost_FOUND)
 	message(FATAL_ERROR  "Please install boost!")
@@ -655,6 +663,21 @@ endif()
 
 message(STATUS "Output dir: ${CMAKE_CURRENT_SOURCE_DIR}/build.dir")
 set(EXECUTABLE_OUTPUT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/build.dir")
+
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/DSView/res
+        ${EXECUTABLE_OUTPUT_PATH}/res
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/DSView/demo
+        ${EXECUTABLE_OUTPUT_PATH}/demo
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/lang
+        ${EXECUTABLE_OUTPUT_PATH}/lang
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/libsigrokdecode4DSL/decoders
+        ${EXECUTABLE_OUTPUT_PATH}/decoders
+)
 
 #===============================================================================
 #= Installation

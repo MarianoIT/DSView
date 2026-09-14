@@ -284,6 +284,7 @@ SR_API void ds_set_datafeed_callback(ds_datafeed_callback_t cb)
 SR_API int ds_get_device_list(struct ds_device_base_info **out_list, int *out_count)
 {
 	int num;
+	int has_usb_device = 0;
 	struct ds_device_base_info *p = NULL;
 	GSList *l;
 	struct sr_dev_inst *dev;
@@ -298,6 +299,24 @@ SR_API int ds_get_device_list(struct ds_device_base_info **out_list, int *out_co
 	pthread_mutex_lock(&lib_ctx.mutext);
 
 	num = g_slist_length(lib_ctx.device_list);
+	for (l = lib_ctx.device_list; l; l = l->next)
+	{
+		dev = l->data;
+		if (dev->dev_type == DEV_TYPE_USB)
+		{
+			has_usb_device = 1;
+			break;
+		}
+	}
+	if (has_usb_device)
+	{
+		for (l = lib_ctx.device_list; l; l = l->next)
+		{
+			dev = l->data;
+			if (dev->dev_type == DEV_TYPE_DEMO)
+				num--;
+		}
+	}
 	if (num == 0)
 	{
 		pthread_mutex_unlock(&lib_ctx.mutext);
@@ -317,6 +336,8 @@ SR_API int ds_get_device_list(struct ds_device_base_info **out_list, int *out_co
 	for (l = lib_ctx.device_list; l; l = l->next)
 	{
 		dev = l->data;
+		if (has_usb_device && dev->dev_type == DEV_TYPE_DEMO)
+			continue;
 		p->handle = dev->handle;
 		strncpy(p->name, (const char*)dev->name, sizeof(p->name) - 1);
 		p++;
@@ -501,6 +522,7 @@ SR_API int ds_get_actived_device_index()
 	int dex = -1;
 	GSList *l = NULL;
 	int i = 0;
+	int has_usb_device = 0;
 	
 	(void)l;
 
@@ -511,8 +533,19 @@ SR_API int ds_get_actived_device_index()
 
 	pthread_mutex_lock(&lib_ctx.mutext);
 
+	    for (l = lib_ctx.device_list; l; l = l->next)
+	    {
+		    if (((struct sr_dev_inst *)l->data)->dev_type == DEV_TYPE_USB)
+		    {
+			    has_usb_device = 1;
+			    break;
+		    }
+	    }
+
 	for (l = lib_ctx.device_list; l; l = l->next)
 	{
+		    if (has_usb_device && ((struct sr_dev_inst *)l->data)->dev_type == DEV_TYPE_DEMO)
+			    continue;
 		if ((struct sr_dev_inst *)l->data == lib_ctx.actived_device_instance)
 		{
 			dex = i;
