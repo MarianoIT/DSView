@@ -30,6 +30,7 @@ struct CaptureSummary {
     std::atomic<uint64_t> logic_bytes{0};
     std::atomic<uint64_t> packets{0};
     std::vector<uint8_t> channel0_samples;
+    std::vector<uint8_t> dso_channel0_samples;
 };
 
 CaptureSummary *capture_summary = nullptr;
@@ -54,6 +55,7 @@ void data_callback(const sr_dev_inst *, const sr_datafeed_packet *packet)
         const auto *data = static_cast<const uint8_t *>(dso->data);
         for (int index = 0; index < dso->num_samples; index++) {
             const uint8_t value = data[index];
+            capture_summary->dso_channel0_samples.push_back(value);
             uint8_t current_min = capture_summary->dso_min;
             while (value < current_min &&
                    !capture_summary->dso_min.compare_exchange_weak(current_min, value)) {}
@@ -293,7 +295,18 @@ int capture_run(int argc, char *argv[])
     uint64_t qt_probe_vdiv = 1000;
     uint32_t qt_ref_min = 0;
     uint32_t qt_ref_max = 255;
+    double hardware_frequency_hz = 0;
+    uint32_t hardware_cycle_count = 0;
+    uint32_t hardware_cycle_length = 0;
     if (!timed_out && !summary.failed && mode == DSO) {
+        sr_status status{};
+        if (ds_get_actived_device_status(&status, FALSE) == SR_OK &&
+            status.ch0_cyc_cnt > 0 && status.ch0_cyc_tlen > 0) {
+            hardware_cycle_count = status.ch0_cyc_cnt;
+            hardware_cycle_length = status.ch0_cyc_tlen;
+            hardware_frequency_hz = static_cast<double>(samplerate) *
+                hardware_cycle_count / hardware_cycle_length;
+        }
         ds_device_full_info device_info{};
         const GSList *channels = nullptr;
         if (ds_get_actived_device_info(&device_info) == SR_OK && device_info.di)
@@ -357,14 +370,16 @@ int capture_run(int argc, char *argv[])
         return 1;
     }
 
-    if (!output_path.empty() && mode == LOGIC) {
+    if (!output_path.empty() && (mode == LOGIC || mode == DSO)) {
         std::ofstream output(output_path, std::ios::binary);
         if (!output) {
             print_error("output_open_failed", "Unable to open capture output");
             return 1;
         }
-        output.write(reinterpret_cast<const char *>(summary.channel0_samples.data()),
-            static_cast<std::streamsize>(summary.channel0_samples.size()));
+        const auto &samples = mode == DSO ? summary.dso_channel0_samples :
+            summary.channel0_samples;
+        output.write(reinterpret_cast<const char *>(samples.data()),
+            static_cast<std::streamsize>(samples.size()));
     }
 
     std::cout << "{\"ok\":true,\"capture\":{\"mode\":\""
@@ -383,6 +398,9 @@ int capture_run(int argc, char *argv[])
               << ",\"voltage_reference_max_v\":3.020000"
               << ",\"qt_ref_min\":" << qt_ref_min
               << ",\"qt_ref_max\":" << qt_ref_max
+              << ",\"hardware_frequency_hz\":" << hardware_frequency_hz
+              << ",\"hardware_cycle_count\":" << hardware_cycle_count
+              << ",\"hardware_cycle_length\":" << hardware_cycle_length
               << ",\"logic_bytes\":" << summary.logic_bytes
               << ",\"channel0_samples\":" << summary.channel0_samples.size()
               << ",\"packets\":" << summary.packets
@@ -394,6 +412,7 @@ int decode_clock(int argc, char *argv[])
 {
     std::string input_path;
     uint64_t samplerate = 0;
+    uint64_t threshold = 1;
     for (int index = 3; index < argc; index++) {
         if (index + 1 >= argc) {
             print_error("invalid_argument", "Missing argument value");
@@ -406,7 +425,11 @@ int decode_clock(int argc, char *argv[])
             print_error("invalid_argument", "Samplerate must be an integer");
             return 1;
         }
-        else if (option != "--input" && option != "--samplerate") {
+        else if (option == "--threshold" && !parse_uint64(argv[index], threshold)) {
+            print_error("invalid_argument", "Threshold must be an integer");
+            return 1;
+        }
+        else if (option != "--input" && option != "--samplerate" && option != "--threshold") {
             print_error("invalid_argument", "Unknown decode option");
             return 1;
         }
@@ -425,7 +448,7 @@ int decode_clock(int argc, char *argv[])
 
     std::vector<uint64_t> rising_edges;
     for (uint64_t index = 1; index < samples.size(); index++)
-        if (!samples[index - 1] && samples[index])
+        if (samples[index - 1] < threshold && samples[index] >= threshold)
             rising_edges.push_back(index);
 
     std::cout << "{\"ok\":true,\"decoder\":\"clock\",\"samplerate\":"
