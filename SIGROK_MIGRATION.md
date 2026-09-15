@@ -160,7 +160,7 @@ ctest --test-dir build-port --output-on-failure -LE hardware
 cmake --build build-port-asan -j6
 ASAN_OPTIONS=halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
   ctest --test-dir build-port-asan --output-on-failure -LE hardware
-MallocStackLogging=1 leaks --atExit -- ./build.dir/dsview-decode-test
+MallocStackLogging=full leaks --atExit -- ./build.dir/dsview-decode-test
 ```
 
 The protocol test loads all 153 production decoders, exercises 20 Clock sessions,
@@ -187,11 +187,37 @@ Recorded decoder results:
 | ASan/UBSan build and equivalent CTest command above | Build succeeded; 5/5 passed, no sanitizer report |
 | Offscreen ASan/UBSan GUI startup, 8 seconds then SIGTERM | Remained running, no sanitizer report |
 | Initial macOS `leaks` run | Identified 694 allocations / 27,408 bytes rooted in match arrays and channel-map key lists; both causes corrected |
-| Repeated `leaks --atExit -- ./build.dir/dsview-decode-test` | macOS MallocStackLogging aborts in `uniquing_table_node_release_internal`; no final leak count available |
+| Default/lite MallocStackLogging | Reproduces an assertion in `uniquing_table_node_release_internal`; use the documented `full` recorder below |
 | `dsview-cli devices list` | Physical DSCope U3P100 detected |
 | `ctest --test-dir build-port --output-on-failure -L hardware` | 2/2 passed: real Clock decoding and 20 acquisition cycles |
 | `ASAN_OPTIONS=halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-port-asan --output-on-failure -L hardware` | 2/2 passed; no sanitizer report |
 
 The migration builds and passes software regression and physical hardware checks.
-A final independent leak count remains unavailable because of the macOS tool
-failure described above. No rollback was made.
+Independent leak checks now complete with the full stack recorder, as recorded
+below. No rollback was made.
+
+## Completed leak validation (2026-09-15)
+
+The default `MallocStackLogging=1` uses the in-memory **lite** recorder on this
+macOS version. Its internal assertion reproduces during the decoder test.
+The local `malloc(3)` manual documents `MallocStackLogging=full`, which instead
+records allocation/deallocation stacks to disk. This mode completes the same
+workload without the recorder assertion. The evidence isolates the failing
+recorder mode; it does not establish the internal cause of that macOS assertion.
+No allocation exclusions, leak filters or sanitizer suppressions were used.
+
+| Exact command | Functional result | Leak result at exit |
+| --- | --- | --- |
+| `MallocStackLogging=full leaks --atExit -- ./build.dir/dsview-decode-test` | All 153 decoders load; repeated Clock/stacked sessions, SPI, annotation and Python-error regressions pass | 0 leaks / 0 bytes |
+| `MallocStackLogging=full leaks --atExit -- ./build.dir/dsview-decode-test --hardware` | DSCope U3P100; 10,000 samples; nine Clock frequency annotations at 997.009–998.004 Hz | 0 leaks / 0 bytes |
+| `MallocStackLogging=full leaks --atExit -- ./build.dir/dsview-hardware-test 20` | 20 physical acquisition/cancellation/reopen cycles pass | 0 leaks / 0 bytes |
+
+Check both the functional output and the final `0 leaks for 0 total leaked bytes`
+line: the `leaks --atExit` exit status alone did not distinguish the recorder
+assertion in earlier attempts. macOS still reports restricted inspection of
+writable contents, but finishes the allocation/stack analysis. These results
+apply to the tested paths, not every protocol, GUI interaction or retained-memory
+behavior during an indefinitely running session.
+
+Local logs: `build-sigrok-migration/artifacts/decode-leaks-full.log`,
+`decode-hardware-leaks-full.log`, and `hardware-leaks-full.log`.
