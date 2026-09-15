@@ -651,6 +651,26 @@ add_executable(${PROJECT_NAME}
 
 target_link_libraries(${PROJECT_NAME} ${DSVIEW_LINK_LIBS})
 
+add_executable(dsview-cli
+    ${common_SOURCES}
+    ${libsigrok4DSL_SOURCES}
+    cli/dsview-cli.cpp
+)
+target_compile_definitions(dsview-cli PRIVATE
+    DSVIEW_CLI_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/build.dir/res"
+)
+target_link_libraries(dsview-cli ${DSVIEW_LINK_LIBS})
+
+include(CTest)
+if(BUILD_TESTING)
+    add_test(
+        NAME dsview-cli-devices-list
+        COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:dsview-cli>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cli/test_devices_list.cmake
+    )
+    set_tests_properties(dsview-cli-devices-list PROPERTIES LABELS "cli")
+endif()
+
 if(WIN32)
 # Pass -mwindows so that no "DOS box" will open when PulseView is started.
 set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "-mwindows")
@@ -679,12 +699,19 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         ${EXECUTABLE_OUTPUT_PATH}/decoders
 )
 
+add_custom_command(TARGET dsview-cli POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/DSView/res
+        ${EXECUTABLE_OUTPUT_PATH}/res
+)
+
 #===============================================================================
 #= Installation
 #-------------------------------------------------------------------------------
 
 # Install the executable.
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+install(TARGETS dsview-cli DESTINATION bin)
 install(DIRECTORY DSView/res DESTINATION share/DSView)
 install(DIRECTORY DSView/demo DESTINATION share/DSView)
 install(FILES DSView/icons/logo.svg DESTINATION share/DSView RENAME logo.svg)

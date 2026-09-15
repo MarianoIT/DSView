@@ -65,6 +65,22 @@ file build.dir/DSView
 otool -L build.dir/DSView
 ```
 
+## Automation CLI
+
+The build also produces `build.dir/dsview-cli`, a non-GUI command-line interface
+that writes one JSON document to standard output. It is intended for scripts and
+LLM-driven tooling.
+
+```sh
+build.dir/dsview-cli devices list
+build.dir/dsview-cli capture run --device-index 0 --mode logic \
+	--samplerate 1000000 --samples 10000 --channel 0 --timeout-ms 5000
+```
+
+DSO captures use a bounded timeout and report `capture_timeout` when the
+instrument does not complete the acquisition. Set `DSVIEW_CLI_DEBUG=1` to write
+driver diagnostics to standard error without affecting JSON standard output.
+
 ## Windows
 
 Use the MSYS2 MinGW64 environment. Install MSYS2, open **MSYS2 MinGW x64**, and
