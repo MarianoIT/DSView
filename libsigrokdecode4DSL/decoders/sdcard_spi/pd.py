@@ -32,6 +32,16 @@ a = ['CMD%d' % i for i in range(64)] + ['ACMD%d' % i for i in range(64)] + \
     ['R' + r.upper() for r in responses] + ['BIT', 'BIT_WARNING']
 Ann = SrdIntEnum.from_list('Ann', a)
 
+
+def crc7(data):
+    crc = 0
+    for byte in data:
+        for bit in range(8):
+            crc <<= 1
+            if ((byte << bit) & 0x80) ^ (crc & 0x80):
+                crc ^= 0x09
+    return crc & 0x7f
+
 class Decoder(srd.Decoder):
     api_version = 3
     id = 'sdcard_spi'
@@ -152,10 +162,12 @@ class Decoder(srd.Decoder):
         self.putb([Ann.BIT, ['Argument: {$}', '@%04X' % self.arg]])
 
         # Bits[7:1]: CRC7
-        # TODO: Check CRC7.
         crc = t[5] >> 1
         self.ss_bit, self.es_bit = tb(0, 7)[1], tb(0, 1)[2]
-        self.putb([Ann.BIT, ['CRC7: {$}', '@%01X' % crc]])
+        if crc == crc7(t[:5]):
+            self.putb([Ann.BIT, ['CRC7: {$}', '@%01X' % crc]])
+        else:
+            self.putb([Ann.BIT_WARNING, ['CRC7: %02X (Warning: invalid)' % crc]])
 
         # Bits[0:0]: End bit (always 1)
         bit, self.ss_bit, self.es_bit = tb(0, 0)[0], tb(0, 0)[1], tb(0, 0)[2]
@@ -219,8 +231,10 @@ class Decoder(srd.Decoder):
     def handle_cmd16(self):
         # CMD16: SET_BLOCKLEN
         self.blocklen = self.arg
-        # TODO: Sanity check on block length.
-        self.putc(Ann.CMD16, 'Set the block length to %d bytes' % self.blocklen)
+        if 1 <= self.blocklen <= 512:
+            self.putc(Ann.CMD16, 'Set the block length to %d bytes' % self.blocklen)
+        else:
+            self.putc(Ann.CMD16, 'Invalid block length %d bytes' % self.blocklen)
         self.state = 'GET RESPONSE R1'
 
     def handle_cmd17(self):
