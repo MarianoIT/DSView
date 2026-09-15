@@ -28,6 +28,7 @@
 # TODO: 
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 '''
 OUTPUT_PYTHON format:
@@ -210,7 +211,7 @@ class Decoder(srd.Decoder):
                 (d0n, d0p) = self.wait([{0: 'h', 1: 'l'}, {0: 'l', 1: 'h'}])
                 self.wait([{0: 'l', 1: 'l'}, {0: 'h', 1: 'h'}])
                 
-                if (self.matched & (0b1 << 0)):
+                if (match_mask(self.matched) & (0b1 << 0)):
                     self.handle_data(d0n, d0p)
                 else :
                     self.handle_stop()

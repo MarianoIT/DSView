@@ -25,7 +25,7 @@
 #include <vector>
 #include <QRect>
 
-struct sr_context;
+#include <libsigrok.h>
 class QWidget;
 
 namespace pv{ 

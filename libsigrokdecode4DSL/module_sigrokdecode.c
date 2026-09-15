@@ -77,7 +77,7 @@ PyMODINIT_FUNC PyInit_sigrokdecode(void)
 
 err_out:
 	Py_XDECREF(mod);
-    srd_exception_catch(NULL, "Failed to initialize module");
+	srd_exception_catch("Failed to initialize module");
 	PyGILState_Release(gstate);
 
 	return NULL;

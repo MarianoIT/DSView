@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from collections import namedtuple
 
 class Ann:
@@ -145,19 +146,19 @@ class Decoder(srd.Decoder):
                     (clock_pin, data_pin) = self.wait({0: 'f'})
                 else:
                     (clock_pin, data_pin) = self.wait([{0: 'f',1: 'r'},{0: 'f',1: 'f'},{0: 'f',1: 'h'},{0: 'f',1: 'l'}])
-                    if (self.matched & (0b1 << 0)):
+                    if (match_mask(self.matched) & (0b1 << 0)):
                         continue
-                    if (self.matched & (0b1 << 1)):
+                    if (match_mask(self.matched) & (0b1 << 1)):
                         self.state = 'HtoD'
                         (clock_pin, data_pin) = self.wait({0: 'r',1: 'l'})
                         self.handle_bits(data_pin)
                         (clock_pin, data_pin) = self.wait({0: 'f'})
-                    if (self.matched & (0b1 << 2)):
+                    if (match_mask(self.matched) & (0b1 << 2)):
                         self.state = 'HtoD'
                         (clock_pin, data_pin) = self.wait({0: 'r',1: 'l'})
                         self.handle_bits(data_pin)
                         (clock_pin, data_pin) = self.wait({0: 'f'})
-                    if (self.matched & (0b1 << 3)):
+                    if (match_mask(self.matched) & (0b1 << 3)):
                         self.state = 'DtoH'
                         self.handle_bits(data_pin)
             if self.state == 'HtoD':
@@ -185,9 +186,9 @@ class Decoder(srd.Decoder):
                 self.handle_bits(data_pin)
                 if (self.bitcount == 11):
                     (clock_pin, data_pin) = self.wait([{1: 'f'},{0: 'r'}])
-                    if (self.matched & (0b1 << 0)):
+                    if (match_mask(self.matched) & (0b1 << 0)):
                         self.handle_bits(data_pin)
                         self.HtoDss = 1
-                    if (self.matched & (0b1 << 1)):
+                    if (match_mask(self.matched) & (0b1 << 1)):
                         self.handle_bits(data_pin)
                         self.HtoDss = 0

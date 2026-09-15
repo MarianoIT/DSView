@@ -324,7 +324,7 @@ SR_PRIV int sr_init(struct sr_context **ctx)
 		goto done;
 	}
 
-	ret = libusb_init(&context->libusb_ctx);
+	ret = ds_core_init_context(context);
 	
 	if (LIBUSB_SUCCESS != ret) {
 		sr_err("%s:%d, Failed to init lib. Error name:%s", 
@@ -359,9 +359,7 @@ SR_PRIV int sr_exit(struct sr_context *ctx)
 		return SR_ERR;
 	}
 
-	sr_hw_cleanup_all();
-
-	libusb_exit(ctx->libusb_ctx);
+	ds_core_exit_context();
 	
 	g_free(ctx);
 
@@ -447,6 +445,8 @@ SR_PRIV int sr_close_hotplug(struct sr_context *ctx)
 
 SR_PRIV void sr_hotplug_wait_timout(struct sr_context *ctx)
 {
+    /* Acquisition owns USB dispatch until all transfers have drained. */
+    if (ds_is_collecting()) return;
 	if (!ctx) {
 		sr_err("%s(): libsigrok context was NULL.", __func__);
 		return;

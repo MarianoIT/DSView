@@ -20,7 +20,6 @@
 
 #include "config.h"
 #include "libsigrokdecode-internal.h" /* First, so we avoid a _POSIX_C_SOURCE warning. */
-#include "log.h"
 
 /**
  * Import a Python module by name.
@@ -40,13 +39,13 @@ SRD_PRIV PyObject *py_import_by_name(const char *name)
 	PyGILState_STATE gstate;
 
 	gstate = PyGILState_Ensure();
-  
+
 	py_modname = PyUnicode_FromString(name);
 	if (!py_modname) {
 		PyGILState_Release(gstate);
 		return NULL;
-	} 
- 
+	}
+
 	py_mod = PyImport_Import(py_modname);
 	Py_DECREF(py_modname);
 
@@ -64,7 +63,7 @@ SRD_PRIV PyObject *py_import_by_name(const char *name)
  * @param[out] outstr ptr to char * storage to be filled in.
  *
  * @return SRD_OK upon success, a (negative) error code otherwise.
- *         The 'outstr' argument points to a g_try_malloc0()ed string upon success.
+ *         The 'outstr' argument points to a g_malloc()ed string upon success.
  *
  * @private
  */
@@ -82,7 +81,7 @@ SRD_PRIV int py_attr_as_str(PyObject *py_obj, const char *attr, char **outstr)
 	}
 
 	if (!(py_str = PyObject_GetAttrString(py_obj, attr))) {
-        srd_exception_catch(NULL, "Failed to get attribute '%s'", attr);
+		srd_exception_catch("Failed to get attribute '%s'", attr);
 		goto err;
 	}
 
@@ -108,7 +107,7 @@ err:
  * @param[out] outstrlist ptr to GSList of char * storage to be filled in.
  *
  * @return SRD_OK upon success, a (negative) error code otherwise.
- *         The 'outstrlist' argument points to a GSList of g_try_malloc0()ed strings
+ *         The 'outstrlist' argument points to a GSList of g_malloc()ed strings
  *         upon success.
  *
  * @private
@@ -116,7 +115,7 @@ err:
 SRD_PRIV int py_attr_as_strlist(PyObject *py_obj, const char *attr, GSList **outstrlist)
 {
 	PyObject *py_list;
-    int i;
+	Py_ssize_t i;
 	int ret;
 	char *outstr;
 	PyGILState_STATE gstate;
@@ -129,7 +128,7 @@ SRD_PRIV int py_attr_as_strlist(PyObject *py_obj, const char *attr, GSList **out
 	}
 
 	if (!(py_list = PyObject_GetAttrString(py_obj, attr))) {
-        srd_exception_catch(NULL, "Failed to get attribute '%s'", attr);
+		srd_exception_catch("Failed to get attribute '%s'", attr);
 		goto err;
 	}
 
@@ -143,7 +142,7 @@ SRD_PRIV int py_attr_as_strlist(PyObject *py_obj, const char *attr, GSList **out
 	for (i = 0; i < PyList_Size(py_list); i++) {
 		ret = py_listitem_as_str(py_list, i, &outstr);
 		if (ret < 0) {
-            srd_dbg("Couldn't get item %d.", i);
+			srd_dbg("Couldn't get item %" PY_FORMAT_SIZE_T "d.", i);
 			goto err;
 		}
 		*outstrlist = g_slist_append(*outstrlist, outstr);
@@ -170,7 +169,7 @@ err:
  * @param[out] outstr Pointer to char * storage to be filled in.
  *
  * @return SRD_OK upon success, a (negative) error code otherwise.
- *         The 'outstr' argument points to a g_try_malloc0()ed string upon success.
+ *         The 'outstr' argument points to a g_malloc()ed string upon success.
  *
  * @private
  */
@@ -188,6 +187,7 @@ SRD_PRIV int py_dictitem_as_str(PyObject *py_obj, const char *key,
 	}
 
 	if (!(py_value = PyDict_GetItemString(py_obj, key))) {
+		srd_dbg("Dictionary has no attribute '%s'.", key);
 		goto err;
 	}
 
@@ -202,41 +202,6 @@ err:
 }
 
 /**
- * Get the value of a Python dictionary item, returned as a int.
- *
- * @param[in] py_obj The dictionary to probe.
- * @param[in] key Key of the item to retrieve.
- *
- * @return -1 upon failed
- *
- * @private
- */
-SRD_PRIV int py_dictitem_to_int(PyObject *py_obj, const char *key)
-{
-    PyObject *py_value;
-    long type;
-    PyGILState_STATE gstate;
-
-    gstate = PyGILState_Ensure();
-
-    if (!PyDict_Check(py_obj)) {
-        srd_dbg("Object is not a dictionary.");
-        goto err;
-    }
-
-    if (!(py_value = PyDict_GetItemString(py_obj, key))) {
-        goto err;
-    }
-
-    type = PyLong_Check(py_value) ? PyLong_AsLong(py_value) : SRD_ERR;
-    return type;
-
-err:
-    PyGILState_Release(gstate);
-    return SRD_ERR;
-}
-
-/**
  * Get the value of a Python list item, returned as a newly
  * allocated char *.
  *
@@ -245,11 +210,11 @@ err:
  * @param[out] outstr Pointer to char * storage to be filled in.
  *
  * @return SRD_OK upon success, a (negative) error code otherwise.
- *         The 'outstr' argument points to a g_try_malloc0()ed string upon success.
+ *         The 'outstr' argument points to a g_malloc()ed string upon success.
  *
  * @private
  */
-SRD_PRIV int py_listitem_as_str(PyObject *py_obj, int idx,
+SRD_PRIV int py_listitem_as_str(PyObject *py_obj, Py_ssize_t idx,
 				char **outstr)
 {
 	PyObject *py_value;
@@ -263,7 +228,7 @@ SRD_PRIV int py_listitem_as_str(PyObject *py_obj, int idx,
 	}
 
 	if (!(py_value = PyList_GetItem(py_obj, idx))) {
-        srd_dbg("Couldn't get list item %d.", idx);
+		srd_dbg("Couldn't get list item %" PY_FORMAT_SIZE_T "d.", idx);
 		goto err;
 	}
 
@@ -286,11 +251,11 @@ err:
  * @param outstr Pointer to char * storage to be filled in.
  *
  * @return SRD_OK upon success, a (negative) error code otherwise.
- *         The 'outstr' argument points to a g_try_malloc0()ed string upon success.
+ *         The 'outstr' argument points to a malloc()ed string upon success.
  *
  * @private
  */
-SRD_PRIV int py_dict_value_to_str(PyObject *py_obj, PyObject *py_key,
+SRD_PRIV int py_pydictitem_as_str(PyObject *py_obj, PyObject *py_key,
 				char **outstr)
 {
 	PyObject *py_value;
@@ -338,7 +303,7 @@ err:
  *
  * @private
  */
-SRD_PRIV int py_pydictitem_as_long(PyObject *py_obj, PyObject *py_key, uint64_t *out)
+SRD_PRIV int py_pydictitem_as_long(PyObject *py_obj, PyObject *py_key, int64_t *out)
 {
 	PyObject *py_value;
 	PyGILState_STATE gstate;
@@ -363,7 +328,7 @@ SRD_PRIV int py_pydictitem_as_long(PyObject *py_obj, PyObject *py_key, uint64_t 
 		goto err;
 	}
 
-	*out = PyLong_AsUnsignedLongLong(py_value);
+	*out = PyLong_AsLongLong(py_value);
 
 	PyGILState_Release(gstate);
 
@@ -374,7 +339,6 @@ err:
 
 	return SRD_ERR_PYTHON;
 }
- 
 
 /**
  * Get the value of a Python unicode string object, returned as a newly
@@ -384,7 +348,7 @@ err:
  * @param[out] outstr ptr to char * storage to be filled in.
  *
  * @return SRD_OK upon success, a (negative) error code otherwise.
- *         The 'outstr' argument points to a g_try_malloc0()ed string upon success.
+ *         The 'outstr' argument points to a g_malloc()ed string upon success.
  *
  * @private
  */
@@ -412,70 +376,16 @@ SRD_PRIV int py_str_as_str(PyObject *py_str, char **outstr)
 			return SRD_OK;
 		}
 	}
-    srd_exception_catch(NULL, "Failed to extract string");
+	srd_exception_catch("Failed to extract string");
 
 	PyGILState_Release(gstate);
 
-	return SRD_ERR_PYTHON;
-}
-
-/*
-*/
-SRD_PRIV int py_object_to_int(PyObject *py_obj, int64_t *out)
-{
-	PyGILState_STATE gstate;
-
-	if (py_obj == NULL){
-		return SRD_ERR_PYTHON;
-	}
-
-	gstate = PyGILState_Ensure();
-
-	if (!PyLong_Check(py_obj))
-	{
-		srd_dbg("py_object_to_int param should be a long.");
-		goto err;
-	}
-
-   *out = PyLong_AsLongLong(py_obj);
-
-	PyGILState_Release(gstate);
-	return SRD_OK;
-
-err:
-	PyGILState_Release(gstate);
-	return SRD_ERR_PYTHON;
-}
-
-SRD_PRIV int py_object_to_uint(PyObject *py_obj, uint64_t *out)
-{
-	PyGILState_STATE gstate;
-
-	if (py_obj == NULL){
-		return SRD_ERR_PYTHON;
-	}
-
-	gstate = PyGILState_Ensure();
-
-	if (!PyLong_Check(py_obj))
-	{
-		srd_dbg("py_object_to_int param should be a long.");
-		goto err;
-	}
-
-   *out = PyLong_AsUnsignedLongLong(py_obj);
-
-	PyGILState_Release(gstate);
-	return SRD_OK;
-
-err:
-	PyGILState_Release(gstate);
 	return SRD_ERR_PYTHON;
 }
 
 /**
  * Convert a Python list of unicode strings to a C string vector.
- * On success, a pointer to a newly allocated NULL-terminated array of
+ * On success, a pointer to a newly allocated NUL-terminated array of
  * allocated C strings is written to @a out_strv. The caller must g_free()
  * each string and the array itself.
  *
@@ -493,13 +403,9 @@ SRD_PRIV int py_strseq_to_char(PyObject *py_strseq, char ***out_strv)
 	ssize_t seq_len, i;
 	PyGILState_STATE gstate;
 	int ret = SRD_ERR_PYTHON;
-	int lv = 0;
-	char dec_buf[15];
 
 	gstate = PyGILState_Ensure();
 
-    str = NULL;
-    strv = NULL;
 	if (!PySequence_Check(py_strseq)) {
 		srd_err("Object does not provide sequence protocol.");
 		goto err;
@@ -507,7 +413,7 @@ SRD_PRIV int py_strseq_to_char(PyObject *py_strseq, char ***out_strv)
 
 	seq_len = PySequence_Size(py_strseq);
 	if (seq_len < 0) {
-        srd_exception_catch(NULL, "Failed to obtain sequence size");
+		srd_exception_catch("Failed to obtain sequence size");
 		goto err;
 	}
 
@@ -521,30 +427,21 @@ SRD_PRIV int py_strseq_to_char(PyObject *py_strseq, char ***out_strv)
 	for (i = 0; i < seq_len; i++) {
 		py_item = PySequence_GetItem(py_strseq, i);
 		if (!py_item)
-			goto err;
+			goto err_out;
 
-		if (PyUnicode_Check(py_item))
-		{
-			py_bytes = PyUnicode_AsUTF8String(py_item);
+		if (!PyUnicode_Check(py_item)) {
 			Py_DECREF(py_item);
-			if (!py_bytes)
-				goto err;
+			goto err_out;
+		}
+		py_bytes = PyUnicode_AsUTF8String(py_item);
+		Py_DECREF(py_item);
+		if (!py_bytes)
+			goto err_out;
 
-			str = g_strdup(PyBytes_AsString(py_bytes));
-			Py_DECREF(py_bytes);
-			if (!str)
-				goto err;
-		}
-		else if (PyLong_Check(py_item))
-		{
-			lv = PyLong_AsLong(py_item);
-			sprintf(dec_buf, "%d", lv);
-			str = g_strdup(dec_buf);
-		}
-		else{
-			Py_DECREF(py_item);
-			goto err;
-		}
+		str = g_strdup(PyBytes_AsString(py_bytes));
+		Py_DECREF(py_bytes);
+		if (!str)
+			goto err_out;
 
 		strv[i] = str;
 	}
@@ -554,11 +451,13 @@ SRD_PRIV int py_strseq_to_char(PyObject *py_strseq, char ***out_strv)
 
 	return SRD_OK;
 
+err_out:
+	g_strfreev(strv);
+	srd_exception_catch("Failed to obtain string item");
+
 err:
-	if (strv)
-		g_strfreev(strv);
-    srd_exception_catch(NULL, "Failed to obtain string item");
 	PyGILState_Release(gstate);
+
 	return ret;
 }
 
@@ -590,7 +489,7 @@ SRD_PRIV GVariant *py_obj_to_variant(PyObject *py_obj)
 			Py_DECREF(py_bytes);
 		}
 		if (!var)
-            srd_exception_catch(NULL, "Failed to extract string value");
+			srd_exception_catch("Failed to extract string value");
 	} else if (PyLong_Check(py_obj)) { /* integer */
 		int64_t val;
 
@@ -598,7 +497,7 @@ SRD_PRIV GVariant *py_obj_to_variant(PyObject *py_obj)
 		if (!PyErr_Occurred())
 			var = g_variant_new_int64(val);
 		else
-            srd_exception_catch(NULL, "Failed to extract integer value");
+			srd_exception_catch("Failed to extract integer value");
 	} else if (PyFloat_Check(py_obj)) { /* float */
 		double val;
 
@@ -606,7 +505,7 @@ SRD_PRIV GVariant *py_obj_to_variant(PyObject *py_obj)
 		if (!PyErr_Occurred())
 			var = g_variant_new_double(val);
 		else
-            srd_exception_catch(NULL, "Failed to extract float value");
+			srd_exception_catch("Failed to extract float value");
 	} else {
 		srd_err("Failed to extract value of unsupported type.");
 	}

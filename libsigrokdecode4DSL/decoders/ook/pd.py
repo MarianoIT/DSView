@@ -23,6 +23,7 @@
 #
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 '''
 OUTPUT_PYTHON format:
@@ -453,7 +454,7 @@ class Decoder(srd.Decoder):
                 self.state = 'DECODING'
             else:
                 (ook,) = self.wait([{0: 'e'}, {'skip': 5 * self.sample_first}])
-                if (self.matched & (0b1 << 1)) and not (self.matched & (0b1 << 0)): # No edges for 5 p's.
+                if (match_mask(self.matched) & (0b1 << 1)) and not (match_mask(self.matched) & (0b1 << 0)): # No edges for 5 p's.
                     self.state = 'DECODE_TIMEOUT'
 
             if not self.samplenumber_last: # Set counters to start of signal.

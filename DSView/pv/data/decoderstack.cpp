@@ -1,3 +1,4 @@
+#include "sigrok/decode-input.h"
 /*
  * This file is part of the PulseView project.
  * DSView is based on PulseView.
@@ -509,28 +510,18 @@ uint64_t DecoderStack::get_max_sample_count()
 	return max_sample_count;
 }
 
-void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decode_end, srd_session *const session)
+void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decode_end, srd_session *const session, srd_decoder_inst *logic_di)
 {
     decode_task_status *status = _stask_stauts;
 
     //uint8_t *chunk = NULL;
     uint64_t last_cnt = 0;
     uint64_t notify_cnt = (decode_end - decode_start + 1)/100;
-    srd_decoder_inst *logic_di = NULL;
-
-    // find the first level decoder instant
-    for (GSList *d = session->di_list; d; d = d->next) {
-        srd_decoder_inst *di = (srd_decoder_inst *)d->data;
-        srd_decoder *decoder = di->decoder;
-        const bool have_probes = (decoder->channels || decoder->opt_channels) != 0;
-        if (have_probes) {
-            logic_di = di;
-            break;
-        }
-    }
-
     assert(logic_di);
 
+    if (decode_end < decode_start || (_dso_snapshot && !_dso_snapshot->get_sample_count()))
+        return;
+    logic_di->abs_cur_samplenum = decode_start;
     uint64_t i = decode_start;
     char *error = NULL; 
     bool bError = false;
@@ -549,7 +540,7 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
     _progress = 0;
     _is_decoding = true;
 
-    void* lbp_array[35];
+    std::vector<void *> lbp_array(logic_di->dec_num_channels, nullptr);
     std::vector<uint8_t> dso_thresholds(logic_di->dec_num_channels);
 
     if (_dso_snapshot) {
@@ -614,6 +605,7 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
  
         uint64_t chunk_end = std::min(end_index + 1, i + MaxChunkSize);
         std::vector<std::vector<uint8_t>> dso_chunks(logic_di->dec_num_channels);
+        std::vector<unsigned> bit_offsets(logic_di->dec_num_channels, 0);
 
         for (int j =0 ; j < logic_di->dec_num_channels; j++) {
             int sig_index = logic_di->dec_channelmap[j];
@@ -636,9 +628,10 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
                     chunk_const.push_back(0);
                 }
                 else if (_snapshot && _snapshot->has_data(sig_index)) {
-                    uint64_t logic_chunk_end = chunk_end - 1;
+                    uint64_t logic_chunk_end = chunk_end;
                     const uint8_t *data_ptr = _snapshot->get_samples(i, logic_chunk_end, sig_index, &lbp);
-                    chunk_end = logic_chunk_end + 1;
+                    chunk_end = std::min(chunk_end, logic_chunk_end);
+                    bit_offsets[j] = i % 8;
                     bool flag = _snapshot->get_sample(i, sig_index);
                     chunk.push_back(data_ptr);
                     chunk_const.push_back(flag);
@@ -668,28 +661,24 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
 
         bEndTime = (chunk_end > end_index);
 
-        if (srd_session_send(
-                session,
-                i,
-                chunk_end,
-                chunk.data(),
-                chunk_const.data(),
-                chunk_end - i,
-                &error) != SRD_OK){
-
-            if (error){
-                _error_message = QString::fromLocal8Bit(error);
-                dsv_err("ERROR: Failed to call srd_session_send:%s", error);
-                g_free(error);
-                error = NULL;
-            }
-
+        unsigned highest_channel = 0;
+        for (int j = 0; j < logic_di->dec_num_channels; j++)
+            if (logic_di->dec_channelmap[j] >= 0)
+                highest_channel = std::max(highest_channel, unsigned(logic_di->dec_channelmap[j]));
+        const size_t unitsize = highest_channel / 8 + 1;
+        auto interleaved = dsview_interleave(chunk.data(), chunk_const.data(),
+            bit_offsets.data(), logic_di->dec_channelmap, logic_di->dec_num_channels,
+            chunk_end - i, unitsize);
+        int result = srd_session_send(session, i, chunk_end, interleaved.data(),
+                                      interleaved.size(), unitsize);
+        if (result != SRD_OK) {
+            _error_message = QString::fromUtf8(srd_strerror(result));
             bError = true;
             break;
         }
 
         decoded_sample_count += chunk_end - i; 
-        _progress = (int)(decoded_sample_count * 100 / end_index);
+        _progress = (int)(decoded_sample_count * 100 / (end_index - decode_start + 1));
         i = chunk_end;   
  
         //use mutex
@@ -711,7 +700,7 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
 
     // the task is normal ends,so all samples was processed;
     if (!bError && bEndTime){
-       srd_session_end(session, &error);
+       ds_srd_session_end(session, &error);
 
         if (error != NULL){
             _error_message = QString::fromLocal8Bit(error);
@@ -734,6 +723,7 @@ void DecoderStack::execute_decode_stack()
 {  
 	srd_session *session = NULL;
 	srd_decoder_inst *prev_di = NULL;
+    srd_decoder_inst *root_di = NULL;
     uint64_t decode_start = 0;
     uint64_t decode_end = 0;
 
@@ -766,6 +756,7 @@ void DecoderStack::execute_decode_stack()
 			return;
 		}
 
+        if (!root_di) root_di = di;
 		if (prev_di)
 			srd_inst_stack (session, prev_di, di);
 
@@ -792,12 +783,12 @@ void DecoderStack::execute_decode_stack()
                     _stask_stauts);
 
     char *error = NULL;
-    if (srd_session_start(session, &error) == SRD_OK){
+    if (srd_session_start(session) == SRD_OK){
        //need a lot time
-        decode_data(decode_start, decode_end, session);
+        decode_data(decode_start, decode_end, session, root_di);
     }
-    else if (error != NULL){
-        _error_message = QString::fromLocal8Bit(error);
+    else {
+        _error_message = tr("Failed to start decoder session.");
     }
 
 	// Destroy the session

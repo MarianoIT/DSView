@@ -431,7 +431,8 @@ static GSList *scan(GSList *options)
             }
            
             usb_dev_info = sr_usb_dev_inst_new(bus, address);
-            usb_dev_info->usb_dev = device_handle;
+            if (!usb_dev_info) { dev_destroy(sdi); break; }
+            usb_dev_info->usb_dev = libusb_ref_device(device_handle);
             sdi->conn = usb_dev_info;
             sdi->status = SR_ST_INACTIVE; 
 
@@ -457,16 +458,13 @@ static GSList *scan(GSList *options)
 
             g_free(firmware);
 
-            libusb_unref_device(device_handle);
-#ifdef _WIN32
-            libusb_unref_device(device_handle);
-#endif
+
 
             sr_info("Waitting for device reconnect, name:\"%s\"", prof->model);
 		}
 	}
 
-	libusb_free_device_list(devlist, 0);
+	libusb_free_device_list(devlist, 1);
 
     if (conn_devices){
         g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
@@ -1317,9 +1315,10 @@ static void remove_sources(struct DSL_context *devc)
     int i;
     sr_info("%s: remove fds from polling", __func__);
     /* Remove fds from polling. */
+    if (!devc->usbfd) return;
     for (i = 0; devc->usbfd[i] != -1; i++)
         sr_source_remove(devc->usbfd[i]);
-    g_free(devc->usbfd);
+    g_clear_pointer(&devc->usbfd, g_free);
 }
 
 static void report_overflow(struct DSL_context *devc)
@@ -1472,6 +1471,8 @@ static int dev_acquisition_start(struct sr_dev_inst *sdi, void *cb_data)
      * settings must be updated before acquisition
      */
     if (sdi->mode == DSO) {
+        ret = dsl_wr_dso(sdi, dso_cmd_gen(sdi, NULL, SR_CONF_SAMPLERATE));
+        if (ret != SR_OK) return ret;
         devc->trigger_hpos =  devc->trigger_hrate * dsl_en_ch_num(sdi) * devc->limit_samples / 200.0;
         ret = dsl_wr_dso(sdi, dso_cmd_gen(sdi, NULL, SR_CONF_HORIZ_TRIGGERPOS));
         if (ret != SR_OK)
@@ -1485,28 +1486,36 @@ static int dev_acquisition_start(struct sr_dev_inst *sdi, void *cb_data)
         return ret;
     }
 
-    /* setup callback function for data transfer */
+    /* Register each source only after its storage is available. */
     lupfd = libusb_get_pollfds(drvc->sr_ctx->libusb_ctx);
+    if (!lupfd) { dsl_abort_transfers(sdi); return SR_ERR; }
     for (i = 0; lupfd[i]; i++);
-
-    if (!(devc->usbfd = g_try_malloc0(sizeof(struct libusb_pollfd) * (i + 1)))){
-        sr_err("%s,ERROR:failed to alloc memory.", __func__);
-    	return SR_ERR;
+    devc->usbfd = g_try_new(int, i + 1);
+    if (!devc->usbfd) {
+        libusb_free_pollfds(lupfd);
+        dsl_abort_transfers(sdi);
+        return SR_ERR_MALLOC;
     }
-
+    devc->usbfd[0] = -1;
     for (i = 0; lupfd[i]; i++) {
-        sr_source_add(lupfd[i]->fd, lupfd[i]->events,
-                  dsl_get_timeout(sdi), receive_data, sdi);
+        ret = sr_source_add(lupfd[i]->fd, lupfd[i]->events,
+            dsl_get_timeout(sdi), receive_data, sdi);
+        if (ret != SR_OK) {
+            libusb_free_pollfds(lupfd);
+            remove_sources(devc);
+            dsl_abort_transfers(sdi);
+            return ret;
+        }
         devc->usbfd[i] = lupfd[i]->fd;
+        devc->usbfd[i + 1] = -1;
     }
-    devc->usbfd[i] = -1;
-    g_free(lupfd);
+    libusb_free_pollfds(lupfd);
 
     wr_cmd.header.dest = DSL_CTL_START;
     wr_cmd.header.size = 0;
     if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK) {
-        devc->status = DSL_ERROR;
-        devc->abort = TRUE;
+        remove_sources(devc);
+        dsl_abort_transfers(sdi);
         return ret;
     }
     devc->status = DSL_START;

@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from common.srdhelper import bitpack
 from math import floor, ceil
 
@@ -394,7 +395,7 @@ class Decoder(srd.Decoder):
             conds.append({0: 'e'})
 
             (rxtx, ) = self.wait(conds)
-            if cond_data_idx is not None and (self.matched & (0b1 << cond_data_idx)):
+            if cond_data_idx is not None and (match_mask(self.matched) & (0b1 << cond_data_idx)):
                 self.inspect_sample(rxtx, inv)
-            if cond_edge_idx is not None and (self.matched & (0b1 << cond_edge_idx)):
+            if cond_edge_idx is not None and (match_mask(self.matched) & (0b1 << cond_edge_idx)):
                 self.inspect_edge(rxtx, inv)

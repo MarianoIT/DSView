@@ -18,6 +18,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from collections import namedtuple
 
 Data = namedtuple('Data', ['ss', 'es', 'val'])
@@ -171,7 +172,7 @@ class Decoder(srd.Decoder):
         self.reset_decoder_state()
 
     def find_clk_edge(self, datapins, clk, cs, first):
-        if self.have_cs and (first or (self.matched & (0b1 << self.have_cs))):
+        if self.have_cs and (first or (match_mask(self.matched) & (0b1 << self.have_cs))):
             # Send all CS# pin value changes.
             oldcs = None if first else 1 - cs
 
@@ -183,7 +184,7 @@ class Decoder(srd.Decoder):
             return
 
         # Ignore sample if the clock pin hasn't changed.
-        if first or not (self.matched & (0b1 << 0)):
+        if first or not (match_mask(self.matched) & (0b1 << 0)):
             return
 
         # Found the correct clock edge, now get the SPI bit(s).

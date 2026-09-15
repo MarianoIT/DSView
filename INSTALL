@@ -7,7 +7,7 @@ Requirements
  - git
  - CMake >= 3.21
  - a C99/C++11 compiler (Apple Clang on macOS)
- - Ninja or make
+ - make (upstream libsigrok uses Autotools), plus optional Ninja
  - Qt >= 6.5
  - GLib >= 2.76
  - zlib
@@ -60,6 +60,7 @@ Step3: Building on macOS Apple Silicon
    -DCMAKE_OSX_ARCHITECTURES=arm64 \
    -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix)"
  $ cmake --build build-arm64
+ $ ctest --test-dir build-arm64 --output-on-failure
  $ cmake --install build-arm64
 
 See the following wiki page for more (OS-specific) instructions:
@@ -68,3 +69,6 @@ See the following wiki page for more (OS-specific) instructions:
 The latest source code:
  https://github.com/DreamSourceLab/DSView
  
+
+Controller port and real hardware/sanitizer validation: SIGROK_MIGRATION.md
+Vendored release sources and licenses: third_party/README.md

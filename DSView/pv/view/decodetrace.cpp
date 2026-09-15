@@ -161,7 +161,7 @@ void DecodeTrace::paint_back(QPainter &p, int left, int right, QColor fore, QCol
     pen.setStyle(Qt::DotLine);
     p.setPen(pen);
     const double sigY = get_y() - (_totalHeight - _view->get_signalHeight())*0.5;
-    p.drawLine(left, sigY, right, sigY);
+    p.drawLine(QPointF(left, sigY), QPointF(right, sigY));
 
     // --draw decode region control
     const double samples_per_pixel = _session->cur_snap_samplerate() * _view->scale();
@@ -170,8 +170,7 @@ void DecodeTrace::paint_back(QPainter &p, int left, int right, QColor fore, QCol
     const double regionY = get_y() - _totalHeight*0.5 - ControlRectWidth;
 
     p.setBrush(View::Blue);
-    p.drawLine(startX, regionY, startX, regionY + _totalHeight + ControlRectWidth);
-    p.drawLine(endX, regionY, endX, regionY + _totalHeight + ControlRectWidth);
+
     const QPointF start_points[] = {
         QPointF(startX-ControlRectWidth, regionY),
         QPointF(startX+ControlRectWidth, regionY),
@@ -182,8 +181,16 @@ void DecodeTrace::paint_back(QPainter &p, int left, int right, QColor fore, QCol
         QPointF(endX+ControlRectWidth, regionY),
         QPointF(endX, regionY+ControlRectWidth)
     };
-    p.drawPolygon(start_points, countof(start_points));
-    p.drawPolygon(end_points, countof(end_points));
+    // Capture limits can be far outside the viewport before samples arrive.
+    // Clip controls before passing coordinates to the raster paint engine.
+    if (startX >= left - ControlRectWidth && startX <= right + ControlRectWidth) {
+        p.drawLine(QPointF(startX, regionY), QPointF(startX, regionY + _totalHeight + ControlRectWidth));
+        p.drawPolygon(start_points, countof(start_points));
+    }
+    if (endX >= left - ControlRectWidth && endX <= right + ControlRectWidth) {
+        p.drawLine(QPointF(endX, regionY), QPointF(endX, regionY + _totalHeight + ControlRectWidth));
+        p.drawPolygon(end_points, countof(end_points));
+    }
 
     // --draw headings
     const int row_height = _view->get_signalHeight();

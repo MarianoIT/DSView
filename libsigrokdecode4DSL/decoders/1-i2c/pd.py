@@ -26,6 +26,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 '''
 OUTPUT_PYTHON format:
@@ -287,12 +288,12 @@ class Decoder(srd.Decoder):
                 (scl, sda) = self.normalized_levels(scl, sda)
 
                 # Check which of the condition(s) matched and handle them.
-                if (self.matched & (0b1 << 0)):
+                if (match_mask(self.matched) & (0b1 << 0)):
                     self.handle_address_or_data(scl, sda)
-                elif (self.matched & (0b1 << 1)):
+                elif (match_mask(self.matched) & (0b1 << 1)):
                     self.warn_partial_byte('START')
                     self.handle_start()
-                elif (self.matched & (0b1 << 2)):
+                elif (match_mask(self.matched) & (0b1 << 2)):
                     self.warn_partial_byte('STOP')
                     self.handle_stop()
             elif self.state == 'FIND DATA':
@@ -306,12 +307,12 @@ class Decoder(srd.Decoder):
                 (scl, sda) = self.normalized_levels(scl, sda)
 
                 # Check which of the condition(s) matched and handle them.
-                if (self.matched & (0b1 << 0)):
+                if (match_mask(self.matched) & (0b1 << 0)):
                     self.handle_address_or_data(scl, sda)
-                elif (self.matched & (0b1 << 1)):
+                elif (match_mask(self.matched) & (0b1 << 1)):
                     self.warn_partial_byte('START')
                     self.handle_start()
-                elif (self.matched & (0b1 << 2)):
+                elif (match_mask(self.matched) & (0b1 << 2)):
                     self.warn_partial_byte('STOP')
                     self.handle_stop()
             elif self.state == 'FIND ACK':
@@ -321,8 +322,8 @@ class Decoder(srd.Decoder):
                 (scl, sda) = self.wait([{0: self.scl_sample_edge},
                                         {0: self.scl_high_level, 1: self.sda_stop_edge}])
                 (scl, sda) = self.normalized_levels(scl, sda)
-                if (self.matched & (0b1 << 0)):
+                if (match_mask(self.matched) & (0b1 << 0)):
                     self.get_ack(scl, sda)
-                elif (self.matched & (0b1 << 1)):
+                elif (match_mask(self.matched) & (0b1 << 1)):
                     self.handle_stop()
 

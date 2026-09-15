@@ -80,65 +80,38 @@ static void print_to_console(struct xlog_receiver_info *info, const char *domain
     fflush(stderr);
 }
  
-/**
- * the file mode process
- */
+/* Reserve both newline and terminator, including when vsnprintf truncates. */
+static size_t format_line(char *buf, size_t capacity, const char *domain,
+                        const char *format, va_list args)
+{
+    size_t used = 0;
+    if (domain && *domain) {
+        int length = snprintf(buf, capacity - 1, "%s: ", domain);
+        if (length > 0) used = (size_t)length < capacity - 2 ? (size_t)length : capacity - 2;
+    }
+    size_t room = capacity - used - 1;
+    int length = vsnprintf(buf + used, room, format, args);
+    if (length > 0) used += (size_t)length < room ? (size_t)length : room - 1;
+    buf[used++] = '\n';
+    buf[used] = '\0';
+    return used;
+}
+
 static void print_to_file(struct xlog_receiver_info *info, const char *domain, const char *format, va_list args)
 {
+    if (!info->_file) return;
     char buf[LOG_MAX_LENGTH + 1];
-    int fmtl;
-    int wr=0;
-    int strl;
-
-    if (info->_file == NULL){
-        return;
-    }
-
-    if (domain && *domain){
-        strl = strlen(domain);
-        strcpy(buf + wr, domain);
-        wr += strl;
-        strcpy(buf + wr, ": ");
-        wr += 2;
-    }
-
-    fmtl = vsnprintf(buf + wr, LOG_MAX_LENGTH - wr - 1, format, args);
-    wr += fmtl;
-    *(buf + wr) = '\n';
-    wr += 1;
-
-	fwrite(buf, wr, 1, info->_file);
+    size_t length = format_line(buf, sizeof(buf), domain, format, args);
+    fwrite(buf, 1, length, info->_file);
     fflush(info->_file);
 }
 
-/**
- * the callback mode process
- */
 static void print_to_user_callback(struct xlog_receiver_info *info, const char *domain, const char *format, va_list args)
 {
+    if (!info->_rev) return;
     char buf[LOG_MAX_LENGTH + 1];
-    int fmtl;
-    int wr=0;
-    int strl;
-
-    if (info->_rev == NULL){
-        return;
-    }
-
-    if (domain && *domain){
-        strl = strlen(domain);
-        strcpy(buf + wr, domain);
-        wr += strl;
-        strcpy(buf + wr, ": ");
-        wr += 2;
-    }
-
-    fmtl = vsnprintf(buf + wr, LOG_MAX_LENGTH - wr - 1, format, args);
-    wr += fmtl;
-    *(buf + wr) = '\n';
-    wr += 1;
- 
-	info->_rev(buf, wr);
+    size_t length = format_line(buf, sizeof(buf), domain, format, args);
+    info->_rev(buf, (int)length);
 }
 
 static xlog_context* xlog_new_context(int bConsole)
@@ -472,6 +445,7 @@ XLOG_API xlog_writer* xlog_create_writer(xlog_context* ctx, const char *domain)
 
     if (ctx != NULL){
         wr = (xlog_writer*)malloc(sizeof(xlog_writer));
+        if (!wr) return NULL;
         wr->_ctx = ctx;
         xlog_set_domain(wr, domain);
         return wr;
@@ -500,7 +474,7 @@ XLOG_API int xlog_set_domain(xlog_writer* wr, const char *domain)
     wr->_domain[0] = '\0';
 
     if (domain && *domain){
-        strncpy(wr->_domain, domain, sizeof(wr->_domain) - 1);
+        snprintf(wr->_domain, sizeof(wr->_domain), "%s", domain);
     }
     return 0;
 }

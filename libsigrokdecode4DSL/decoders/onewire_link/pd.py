@@ -22,6 +22,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 class SamplerateError(Exception):
     pass
@@ -289,7 +290,7 @@ class Decoder(srd.Decoder):
                 # Calculate time since rising edge.
                 time = ((self.samplenum - self.rise) / self.samplerate) * 1000000.0
 
-                if (self.matched & (0b1 << 0)) and not (self.matched & (0b1 << 1)):
+                if (match_mask(self.matched) & (0b1 << 0)) and not (match_mask(self.matched) & (0b1 << 1)):
                     # Presence detected.
                     if time < timing['PDH']['min'][self.overdrive]:
                         self.putrs([1, ['Presence detect signal is too early',
@@ -324,7 +325,7 @@ class Decoder(srd.Decoder):
                 # Wait for a falling edge and/or end of timeslot.
                 self.wait_falling_timeout(self.fall, timing['SLOT']['min'])
 
-                if (self.matched & (0b1 << 0)) and not (self.matched & (0b1 << 1)):
+                if (match_mask(self.matched) & (0b1 << 0)) and not (match_mask(self.matched) & (0b1 << 1)):
                     # Low detected before end of slot.
                     self.putfs([1, ['Time slot not long enough',
                         'Slot too short',
@@ -360,7 +361,7 @@ class Decoder(srd.Decoder):
                 # Wait for a falling edge and/or end of presence detect.
                 self.wait_falling_timeout(self.rise, timing['RSTH']['min'])
 
-                if (self.matched & (0b1 << 0)) and not (self.matched & (0b1 << 1)):
+                if (match_mask(self.matched) & (0b1 << 0)) and not (match_mask(self.matched) & (0b1 << 1)):
                     # Low detected before end of presence detect.
                     self.putfs([1, ['Presence detect not long enough',
                         'Presence detect too short',

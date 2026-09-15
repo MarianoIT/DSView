@@ -18,6 +18,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from common.srdhelper import bitpack
 import decimal
 
@@ -272,7 +273,7 @@ class Decoder(srd.Decoder):
             self.es = self.samplenum
 
             # Check for the sleep bit if this is a timeout condition
-            if bMoreMatch and self.matched & 0b10 == 0b10:
+            if bMoreMatch and match_mask(self.matched) & 0b10 == 0b10:
                 rising_edge = ~rising_edge
                 if self.state == state_sync:
                     self.reset()
@@ -331,5 +332,5 @@ class Decoder(srd.Decoder):
 
             # If we got here when a timeout occurred, we have processed all null
             # bits that we could and should reset now to find the next packet
-            if bMoreMatch and self.matched & 0b10 == 0b10:
+            if bMoreMatch and match_mask(self.matched) & 0b10 == 0b10:
                 self.reset()

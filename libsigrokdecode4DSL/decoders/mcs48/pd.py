@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 class ChannelError(Exception):
     pass
@@ -116,7 +117,7 @@ class Decoder(srd.Decoder):
             if has_bank:
                 addr += bank[:bank_pin_count]
             # Handle those conditions (one or more) that matched this time.
-            if (self.matched & (0b1 << 0)):
+            if (match_mask(self.matched) & (0b1 << 0)):
                 self.newaddr(addr, data)
-            if (self.matched & (0b1 << 1)):
+            if (match_mask(self.matched) & (0b1 << 1)):
                 self.newdata(data)

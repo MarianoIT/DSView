@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 step_wait_conds = (
     [{2: 'f'}, {0: 'l', 1: 'h'}],
@@ -127,12 +128,12 @@ class Decoder(srd.Decoder):
 
             (data, clk, atn, srq) = self.wait(step_wait_conds[self.step])
 
-            if (self.matched & (0b1 << 0)):
+            if (match_mask(self.matched) & (0b1 << 0)):
                 # Falling edge on ATN, reset step.
                 self.step = 0
 
             if self.step == 0:
-                # Don't use self.matched_[1] here since we might come from
+                # Don't use match_mask(self.matched)_[1] here since we might come from
                 # a step with different conds due to the code above.
                 if data == 0 and clk == 1:
                     # Rising edge on CLK while DATA is low: Ready to send.
@@ -156,7 +157,7 @@ class Decoder(srd.Decoder):
                 elif clk == 0:
                     self.step = 3
             elif self.step == 3:
-                if (self.matched & (0b1 << 1)):
+                if (match_mask(self.matched) & (0b1 << 1)):
                     if clk == 1:
                         # Rising edge on CLK; latch DATA.
                         self.bits |= data << self.numbits

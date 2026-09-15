@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 ann = [
     ['Size', 'L'],
@@ -148,9 +149,9 @@ class Decoder(srd.Decoder):
         count = 0
         while True:
             (sdcka, sdckb) = self.wait([{1: 'f'}, {0: 'r'}])
-            if (self.matched & (0b1 << 0)):
+            if (match_mask(self.matched) & (0b1 << 0)):
                 count = count + 1
-            if (self.matched & (0b1 << 1)):
+            if (match_mask(self.matched) & (0b1 << 1)):
                 self.es = self.samplenum
                 if sdckb == 1:
                     if count == 4:
@@ -178,14 +179,14 @@ class Decoder(srd.Decoder):
         while countb < 4:
             (sdcka, sdckb) = self.wait([{0: 'f'}, {1: 'f'}])
             self.es = self.samplenum
-            if (self.matched & (0b1 << 0)):
+            if (match_mask(self.matched) & (0b1 << 0)):
                 if counta == countb:
                     self.got_bit(sdckb)
                     counta = counta + 1
                 elif counta == 1 and countb == 0 and self.data == 0 and sdckb == 0:
                     self.wait([{0: 'h', 1: 'h'}, {0: 'f'}, {1: 'f'}])
                     self.es = self.samplenum
-                    if (self.matched & (0b1 << 0)):
+                    if (match_mask(self.matched) & (0b1 << 0)):
                         self.got_end()
                     else:
                         self.frame_error()
@@ -193,7 +194,7 @@ class Decoder(srd.Decoder):
                 else:
                     self.frame_error()
                     return False
-            elif (self.matched & (0b1 << 1)):
+            elif (match_mask(self.matched) & (0b1 << 1)):
                 if counta == countb + 1:
                     self.got_bit(sdcka)
                     countb = countb + 1

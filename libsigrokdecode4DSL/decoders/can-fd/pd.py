@@ -26,6 +26,7 @@
 
 from common.srdhelper import bitpack_msb
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 class SamplerateError(Exception):
     pass
@@ -614,7 +615,7 @@ class Decoder(srd.Decoder):
                 
                 pos = self.get_sample_point(self.curbit)
                 (can_rx,) = self.wait([{'skip': pos - self.samplenum}, {0: 'f'}])
-                if (self.matched & (0b1 << 1)):
+                if (match_mask(self.matched) & (0b1 << 1)):
                     self.dom_edge_seen()
-                if (self.matched & (0b1 << 0)):
+                if (match_mask(self.matched) & (0b1 << 0)):
                     self.handle_bit(can_rx)

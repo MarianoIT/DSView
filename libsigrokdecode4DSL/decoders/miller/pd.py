@@ -26,6 +26,7 @@
 # modified Miller: falling edge
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 def roundto(x, k=1.0):
     return round(x / k) * k
@@ -86,7 +87,7 @@ class Decoder(srd.Decoder):
 
         while True:
             self.wait([{0: edgetype}, {'skip': int(3 * timeunit)}])
-            got_timeout = (self.matched & (0b1 << 1))
+            got_timeout = (match_mask(self.matched) & (0b1 << 1))
             sampledelta = (self.samplenum - prevedge)
             prevedge = self.samplenum
             timedelta = roundto(sampledelta / timeunit, 0.5)

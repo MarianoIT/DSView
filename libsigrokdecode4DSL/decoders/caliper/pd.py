@@ -22,6 +22,7 @@
 ## SOFTWARE.
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from common.srdhelper import bitpack
 
 # Millimeters per inch.
@@ -91,7 +92,7 @@ class Decoder(srd.Decoder):
             # after inactivity for a user specified period. Present the
             # number of unprocessed bits to the user for diagnostics.
             clk, data = self.wait(wait_cond)
-            if timeout_ms and not self.matched & 0b1 == 0b1:
+            if timeout_ms and not match_mask(self.matched) & 0b1 == 0b1:
                 if self.number_bits or self.flags_bits:
                     count = len(self.number_bits) + len(self.flags_bits)
                     self.putg(self.ss, self.samplenum, 1, [

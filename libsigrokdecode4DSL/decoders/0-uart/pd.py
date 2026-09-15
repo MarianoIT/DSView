@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from common.srdhelper import bitpack
 from math import floor, ceil
 
@@ -279,5 +280,5 @@ class Decoder(srd.Decoder):
         while True:
             conds = self.get_wait_cond(inv)
             (rxtx, ) = self.wait(conds)
-            if (self.matched & (0b1 << 0)):
+            if (match_mask(self.matched) & (0b1 << 0)):
                 self.inspect_sample(rxtx, inv)

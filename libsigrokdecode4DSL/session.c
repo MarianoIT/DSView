@@ -23,9 +23,6 @@
 #include "libsigrokdecode.h"
 #include <inttypes.h>
 #include <glib.h>
-#include "log.h"
-
-SRD_PRIV int srd_call_sub_decoder_end(struct srd_decoder_inst *di, char **error);
 
 /**
  * @file
@@ -63,26 +60,17 @@ SRD_PRIV int max_session_id = -1;
  */
 SRD_API int srd_session_new(struct srd_session **sess)
 {
-	struct srd_session *se = NULL;
-
 	if (!sess)
 		return SRD_ERR_ARG;
 
-	se = g_try_malloc0(sizeof(struct srd_session));
-	if (se == NULL){
-		srd_err("%s,ERROR:failed to alloc memory.", __func__);
-		return SRD_ERR;
-	}
-	memset(se, 0, sizeof(struct srd_session));
-
-	se->session_id = ++max_session_id;
+	*sess = g_malloc(sizeof(struct srd_session));
+	(*sess)->session_id = ++max_session_id;
+	(*sess)->di_list = (*sess)->callbacks = NULL;
 
 	/* Keep a list of all sessions, so we can clean up as needed. */
-	sessions = g_slist_append(sessions, se);
+	sessions = g_slist_append(sessions, *sess);
 
-	*sess = se;
-
-	//srd_info("Creating session %d.", (*sess)->session_id);
+	srd_dbg("Creating session %d.", (*sess)->session_id);
 
 	return SRD_OK;
 }
@@ -99,7 +87,7 @@ SRD_API int srd_session_new(struct srd_session **sess)
  *
  * @since 0.3.0
  */
-SRD_API int srd_session_start(struct srd_session *sess, char **error)
+SRD_API int srd_session_start(struct srd_session *sess)
 {
 	GSList *d;
 	struct srd_decoder_inst *di;
@@ -108,13 +96,13 @@ SRD_API int srd_session_start(struct srd_session *sess, char **error)
 	if (!sess)
 		return SRD_ERR_ARG;
 
-	srd_info("Calling start() of all instances in session %d.", sess->session_id);
+	srd_dbg("Calling start() of all instances in session %d.", sess->session_id);
 
 	/* Run the start() method of all decoders receiving frontend data. */
 	ret = SRD_OK;
 	for (d = sess->di_list; d; d = d->next) {
 		di = d->data;
-        if ((ret = srd_inst_start(di, error)) != SRD_OK)
+		if ((ret = srd_inst_start(di)) != SRD_OK)
 			break;
 	}
 
@@ -273,7 +261,7 @@ SRD_API int srd_session_metadata_set(struct srd_session *sess, int key,
  */
 SRD_API int srd_session_send(struct srd_session *sess,
 		uint64_t abs_start_samplenum, uint64_t abs_end_samplenum,
-        const uint8_t **inbuf, const uint8_t *inbuf_const, uint64_t inbuflen, char **error)
+		const uint8_t *inbuf, uint64_t inbuflen, uint64_t unitsize)
 {
 	GSList *d;
 	int ret;
@@ -281,10 +269,9 @@ SRD_API int srd_session_send(struct srd_session *sess,
 	if (!sess)
 		return SRD_ERR_ARG;
 
-	//foreach srd_decoder_inst* stack
 	for (d = sess->di_list; d; d = d->next) {
 		if ((ret = srd_inst_decode(d->data, abs_start_samplenum,
-                abs_end_samplenum, inbuf, inbuf_const, inbuflen, error)) != SRD_OK)
+				abs_end_samplenum, inbuf, inbuflen, unitsize)) != SRD_OK)
 			return ret;
 	}
 
@@ -356,7 +343,7 @@ SRD_API int srd_session_destroy(struct srd_session *sess)
 	sessions = g_slist_remove(sessions, sess);
 	g_free(sess);
 
-	srd_info("Destroyed session %d.", session_id);
+	srd_dbg("Destroyed session %d.", session_id);
 
 	return SRD_OK;
 }
@@ -388,13 +375,7 @@ SRD_API int srd_pd_output_callback_add(struct srd_session *sess,
 	srd_dbg("Registering new callback for output type %s.",
 		output_type_name(output_type));
 
-	pd_cb = g_try_malloc0(sizeof(struct srd_pd_callback));
-	if (pd_cb == NULL){
-		srd_err("%s,ERROR:failed to alloc memory.", __func__);
-		return SRD_ERR;
-	}
-	memset(pd_cb, 0, sizeof(struct srd_pd_callback));
-	
+	pd_cb = g_malloc(sizeof(struct srd_pd_callback));
 	pd_cb->output_type = output_type;
 	pd_cb->cb = cb;
 	pd_cb->cb_data = cb_data;
@@ -425,87 +406,39 @@ SRD_PRIV struct srd_pd_callback *srd_pd_output_callback_find(
 	return pd_cb;
 }
 
-SRD_API int srd_session_end(struct srd_session *sess, char **error)
-{
-	GSList *d;
-	struct srd_decoder_inst *di;
-	PyGILState_STATE gstate;
-	PyObject *py_res;
-	int ret;
-
-	if (!sess || !sess->di_list){
-		return SRD_ERR;
-	}
-
-	gstate = PyGILState_Ensure();
-
-	for (d = sess->di_list; d; d = d->next)
-	{
-		di = d->data;
-
-		if (PyObject_HasAttrString(di->py_inst, "end"))
-		{
-			//set the last sample index
-			PyObject *py_cur_samplenum = PyLong_FromUnsignedLongLong(di->abs_cur_samplenum);
-            PyObject_SetAttrString(di->py_inst, "last_samplenum", py_cur_samplenum);
-            Py_DECREF(py_cur_samplenum);
-
-			py_res = PyObject_CallMethod(di->py_inst, "end", NULL);
-
-			if (!py_res)
-			{ 
-				srd_exception_catch(error, "Protocol decoder instance %s",
-									di->inst_id);
-				PyGILState_Release(gstate);
-				return SRD_ERR_PYTHON;
-			}
-		}
-
-		if (di->next_di != NULL){
-			ret = srd_call_sub_decoder_end(di, error);
-			if (ret != SRD_OK){
-				PyGILState_Release(gstate);
-				return ret;
-			}
-		}
-	}
-
-	PyGILState_Release(gstate);
-	return SRD_OK;
-}
-
-
-SRD_PRIV int srd_call_sub_decoder_end(struct srd_decoder_inst *di, char **error)
-{
-	assert(di && di->next_di);
-
-	GSList *l;
-	struct srd_decoder_inst *sub_dec;
-	PyObject *py_res; 
-
-	for (l = di->next_di; l; l = l->next){
-		sub_dec = l->data;
-
-		if (PyObject_HasAttrString(sub_dec->py_inst, "end"))
-		{
-			py_res = PyObject_CallMethod(sub_dec->py_inst, "end", NULL);
-
-			if (!py_res)
-			{ 
-				srd_exception_catch(error, "Protocol decoder instance %s",
-									sub_dec->inst_id);
-				return SRD_ERR_PYTHON;
-			}
-		}
-
-		//next level decoder
-		if (sub_dec->next_di != NULL){
-			if (srd_call_sub_decoder_end(sub_dec, error) != SRD_OK)
-				return SRD_ERR_PYTHON;
-		}
-	}
-
-	return SRD_OK;
-}
-
 /** @} */
+
+/* DSView's optional completion hook runs while decoder workers await input.
+ * Flush parents before children so stacked decoders receive their last data. */
+static int ds_decoder_end(struct srd_decoder_inst *di, uint64_t last_sample, char **error)
+{
+    if (PyObject_HasAttrString(di->py_inst, "end")) {
+        PyObject *last = PyLong_FromUnsignedLongLong(last_sample);
+        if (!last) goto failed;
+        int result = PyObject_SetAttrString(di->py_inst, "last_samplenum", last);
+        Py_DECREF(last);
+        if (result < 0) goto failed;
+        PyObject *value = PyObject_CallMethod(di->py_inst, "end", NULL);
+        if (!value) goto failed;
+        Py_DECREF(value);
+    }
+    for (GSList *entry = di->next_di; entry; entry = entry->next)
+        if (ds_decoder_end(entry->data, last_sample, error) != SRD_OK) return SRD_ERR_PYTHON;
+    return SRD_OK;
+failed:
+    if (error) *error = g_strdup_printf("Decoder %s failed in end()", di->inst_id);
+    srd_exception_catch("Decoder completion failed");
+    return SRD_ERR_PYTHON;
+}
+SRD_API int ds_srd_session_end(struct srd_session *sess, char **error)
+{
+    if (error) *error = NULL;
+    if (!sess) return SRD_ERR_ARG;
+    PyGILState_STATE state = PyGILState_Ensure();
+    int result = SRD_OK;
+    for (GSList *entry = sess->di_list; entry && result == SRD_OK; entry = entry->next)
+        result = ds_decoder_end(entry->data,
+            ((struct srd_decoder_inst *)entry->data)->abs_cur_samplenum, error);
+    PyGILState_Release(state);
+    return result;
+}

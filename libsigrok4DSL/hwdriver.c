@@ -148,7 +148,7 @@ SR_PRIV int sr_driver_init(struct sr_context *ctx, struct sr_dev_driver *driver)
 	}
 
 	sr_detail("Initializing driver '%s'.", driver->name);
-	if ((ret = driver->init(ctx)) < 0)
+	if ((ret = ds_core_register_driver(driver)) < 0)
 		sr_err("Failed to initialize the driver: %d.", ret);
 
 	return ret;
@@ -414,14 +414,14 @@ SR_PRIV int ds_scan_all_device_list(libusb_context *usb_ctx,struct libusb_device
 				break;
 			}
 
-			list_buf[wr] = devlist[i];
+			list_buf[wr] = libusb_ref_device(devlist[i]);
 			wr++;
 		}
 	}
 
 	*count = wr;
 
-	libusb_free_device_list(devlist, 0);
+	libusb_free_device_list(devlist, 1);
 
 	return SR_OK;
 }

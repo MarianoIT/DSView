@@ -461,12 +461,14 @@ set(DSView_HEADERS
 #===============================================================================
 #= libsigrok4DSL source
 #-------------------------------------------------------------------------------
+include(CMake/Sigrok.cmake)
+
 set(libsigrok4DSL_SOURCES
     libsigrok4DSL/version.c
     libsigrok4DSL/strutil.c
     libsigrok4DSL/std.c
     libsigrok4DSL/session_driver.c
-    libsigrok4DSL/session.c
+    libsigrok4DSL/core-adapter.c
     libsigrok4DSL/log.c
     libsigrok4DSL/hwdriver.c
     libsigrok4DSL/error.c
@@ -606,11 +608,7 @@ endif()
 #===============================================================================
 #= Release flags
 #-------------------------------------------------------------------------------
-set(CMAKE_CXX_FLAGS "-Wall -Wextra")
-set(CMAKE_BUILD_TYPE Release)
-set(CMAKE_CXX_FLAGS_DEBUG "-g")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-add_compile_options(-O3)
+add_compile_options(-Wall -Wextra)
 
 #===============================================================================
 #= Linker Configuration
@@ -618,6 +616,7 @@ add_compile_options(-O3)
 
 
 set(DSVIEW_LINK_LIBS
+    dsview_sigrok_core
 	-lz
 	-lglib-2.0
 	${CMAKE_THREAD_LIBS_INIT}
@@ -639,36 +638,72 @@ else()
 	list(APPEND DSVIEW_LINK_LIBS ${PKGDEPS_LIBRARIES})
 endif()
 
+set(DSVIEW_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build.dir" CACHE PATH "Executable and runtime resource directory")
+set(EXECUTABLE_OUTPUT_PATH "${DSVIEW_OUTPUT_DIR}")
+message(STATUS "Output dir: ${DSVIEW_OUTPUT_DIR}")
+
+add_library(dsview_protocol STATIC ${common_SOURCES} ${libsigrok4DSL_SOURCES})
+target_link_libraries(dsview_protocol PUBLIC ${DSVIEW_LINK_LIBS})
+
 add_executable(${PROJECT_NAME}
-	${common_SOURCES}
 	${DSView_SOURCES}
 	${DSView_HEADERS_MOC}
 	${DSView_FORMS_HEADERS}
 	${DSView_RESOURCES_RCC}
-	${libsigrok4DSL_SOURCES}
-	${libsigrokdecode4DSL_SOURCES}
 )
 
-target_link_libraries(${PROJECT_NAME} ${DSVIEW_LINK_LIBS})
+add_library(dsview_decode STATIC ${libsigrokdecode4DSL_SOURCES})
+target_link_libraries(dsview_decode PUBLIC dsview_protocol)
+target_compile_definitions(dsview_decode PRIVATE CONF_HOST="${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_SYSTEM_NAME}")
+target_link_libraries(${PROJECT_NAME} dsview_decode)
 
-add_executable(dsview-cli
-    ${common_SOURCES}
-    ${libsigrok4DSL_SOURCES}
-    cli/dsview-cli.cpp
-)
+add_executable(dsview-cli cli/dsview-cli.cpp)
 target_compile_definitions(dsview-cli PRIVATE
-    DSVIEW_CLI_RESOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/build.dir/res"
+    DSVIEW_CLI_RESOURCE_DIR="${DSVIEW_OUTPUT_DIR}/res"
 )
-target_link_libraries(dsview-cli ${DSVIEW_LINK_LIBS})
+target_link_libraries(dsview-cli dsview_protocol)
+
+option(DSVIEW_HARDWARE_TESTS "Enable tests requiring a connected DSL oscilloscope" OFF)
+add_executable(dsview-hardware-test EXCLUDE_FROM_ALL
+    cli/hardware_capture_test.c)
+target_compile_definitions(dsview-hardware-test PRIVATE
+    DSVIEW_CLI_RESOURCE_DIR="${DSVIEW_OUTPUT_DIR}/res")
+target_link_libraries(dsview-hardware-test dsview_protocol)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(dsview-decode-test cli/decode_test.cpp)
+    target_link_libraries(dsview-decode-test PRIVATE dsview_decode)
+    target_compile_definitions(dsview-decode-test PRIVATE
+        DSVIEW_DECODER_DIR="${DSVIEW_OUTPUT_DIR}/decoders"
+        DSVIEW_DECODER_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/cli/decoder_fixtures"
+        DSVIEW_CLI_RESOURCE_DIR="${DSVIEW_OUTPUT_DIR}/res")
+    add_test(NAME dsview-decode-protocols COMMAND dsview-decode-test)
+    set_tests_properties(dsview-decode-protocols PROPERTIES TIMEOUT 60)
+    if(DSVIEW_HARDWARE_TESTS)
+        add_test(NAME dsview-decode-hardware COMMAND dsview-decode-test --hardware)
+        set_tests_properties(dsview-decode-hardware PROPERTIES TIMEOUT 60 RESOURCE_LOCK dsl_usb LABELS "hardware")
+    endif()
+    add_executable(dsview-log-test cli/test_log.c common/log/xlog.c)
+    target_link_libraries(dsview-log-test PRIVATE ${CMAKE_THREAD_LIBS_INIT})
+    add_test(NAME dsview-log-bounds COMMAND dsview-log-test)
+    add_test(NAME dsview-sigrok-version COMMAND dsview-cli --version)
+    set_tests_properties(dsview-sigrok-version PROPERTIES PASS_REGULAR_EXPRESSION "libsigrok 0.5.2")
+    add_test(NAME dsview-sigrok-symbols COMMAND ${CMAKE_COMMAND}
+        -DNM=${CMAKE_NM} -DPROTOCOL=$<TARGET_FILE:dsview_protocol>
+        -DUPSTREAM=${SIGROK_PREFIX}/lib/libsigrok.a
+        -P ${CMAKE_SOURCE_DIR}/CMake/TestSigrokSymbols.cmake)
+    if(DSVIEW_HARDWARE_TESTS)
+        set_target_properties(dsview-hardware-test PROPERTIES EXCLUDE_FROM_ALL FALSE)
+        add_test(NAME dsview-hardware-capture COMMAND dsview-hardware-test 20)
+        set_tests_properties(dsview-hardware-capture PROPERTIES TIMEOUT 180 LABELS "hardware" RESOURCE_LOCK dsl_usb)
+    endif()
     add_test(
         NAME dsview-cli-devices-list
         COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:dsview-cli>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/cli/test_devices_list.cmake
     )
-    set_tests_properties(dsview-cli-devices-list PROPERTIES LABELS "cli")
+    set_tests_properties(dsview-cli-devices-list PROPERTIES LABELS "cli" RESOURCE_LOCK dsl_usb)
 endif()
 
 if(WIN32)
@@ -681,29 +716,20 @@ if(ENABLE_COTIRE)
 	cotire(${PROJECT_NAME})
 endif()
 
-message(STATUS "Output dir: ${CMAKE_CURRENT_SOURCE_DIR}/build.dir")
-set(EXECUTABLE_OUTPUT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/build.dir")
 
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/DSView/res
-        ${EXECUTABLE_OUTPUT_PATH}/res
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/DSView/demo
-        ${EXECUTABLE_OUTPUT_PATH}/demo
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/lang
-        ${EXECUTABLE_OUTPUT_PATH}/lang
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/libsigrokdecode4DSL/decoders
-        ${EXECUTABLE_OUTPUT_PATH}/decoders
-)
-
-add_custom_command(TARGET dsview-cli POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/DSView/res
-        ${EXECUTABLE_OUTPUT_PATH}/res
-)
+# One resource producer avoids concurrent copy_directory calls racing on the
+# same destination when GUI, CLI and hardware test are linked in parallel.
+add_custom_target(dsview_resources
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/DSView/res ${DSVIEW_OUTPUT_DIR}/res
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/DSView/demo ${DSVIEW_OUTPUT_DIR}/demo
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lang ${DSVIEW_OUTPUT_DIR}/lang
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/libsigrokdecode4DSL/decoders ${DSVIEW_OUTPUT_DIR}/decoders)
+add_dependencies(${PROJECT_NAME} dsview_resources)
+add_dependencies(dsview-cli dsview_resources)
+add_dependencies(dsview-hardware-test dsview_resources)
+if(TARGET dsview-decode-test)
+    add_dependencies(dsview-decode-test dsview_resources)
+endif()
 
 #===============================================================================
 #= Installation
