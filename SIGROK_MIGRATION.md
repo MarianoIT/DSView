@@ -174,9 +174,10 @@ Physical decoder validation is available as `dsview-decode-test --hardware`
 (or CTest `dsview-decode-hardware` with `DSVIEW_HARDWARE_TESTS=ON`). It captures
 10,000 real DSO samples, thresholds them, decodes Clock in 17-sample chunks, and
 compares annotation counts to independently counted edges. It requires a periodic
-signal and rejects Demo. During this migration the instrument was not detected;
-this new physical decoding check remains pending. The earlier controller hardware
-results above do not establish physical validation of the new decoder engine.
+signal and rejects Demo. After reconnecting the DSCope U3P100, this check passed
+in both Release and ASan/UBSan builds: 10,000 samples and nine frequency
+annotations at 999.001 Hz–1.000 kHz. The acquisition test also passed 20 cycles
+in each build, including capture, cancellation and reopen.
 
 Recorded decoder results:
 
@@ -187,7 +188,10 @@ Recorded decoder results:
 | Offscreen ASan/UBSan GUI startup, 8 seconds then SIGTERM | Remained running, no sanitizer report |
 | Initial macOS `leaks` run | Identified 694 allocations / 27,408 bytes rooted in match arrays and channel-map key lists; both causes corrected |
 | Repeated `leaks --atExit -- ./build.dir/dsview-decode-test` | macOS MallocStackLogging aborts in `uniquing_table_node_release_internal`; no final leak count available |
-| `dsview-decode-test --hardware` and `dsview-cli devices list` | Physical instrument unavailable; enumeration contains only Demo |
+| `dsview-cli devices list` | Physical DSCope U3P100 detected |
+| `ctest --test-dir build-port --output-on-failure -L hardware` | 2/2 passed: real Clock decoding and 20 acquisition cycles |
+| `ASAN_OPTIONS=halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-port-asan --output-on-failure -L hardware` | 2/2 passed; no sanitizer report |
 
-The migration builds and passes software regression checks. Physical acceptance
-and a final independent leak count are still outstanding. No rollback was made.
+The migration builds and passes software regression and physical hardware checks.
+A final independent leak count remains unavailable because of the macOS tool
+failure described above. No rollback was made.
