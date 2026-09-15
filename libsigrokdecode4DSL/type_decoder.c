@@ -796,7 +796,8 @@ static int get_current_pinvalues(const struct srd_decoder_inst *di)
  *
  * @return SRD_OK upon success, a negative error code otherwise.
  */
-static int create_term_list(PyObject *py_dict, GSList **term_list, gboolean cur_matched)
+static int create_term_list(PyObject *py_dict, GSList **term_list,
+							gboolean cur_matched, int channel_count)
 {
 	Py_ssize_t pos = 0;
 	PyObject *py_key, *py_value;
@@ -818,7 +819,13 @@ static int create_term_list(PyObject *py_dict, GSList **term_list, gboolean cur_
 		/* Check whether the current key is a string or a number. */
 		if (PyLong_Check(py_key)) {
 			/* The key is a number. */
-			/* TODO: Check if the number is a valid channel. */
+			long channel = PyLong_AsLong(py_key);
+			if (PyErr_Occurred() || channel < 0 || channel >= channel_count) {
+				srd_err("Invalid channel index %ld, decoder has %d channel(s).",
+					channel, channel_count);
+				PyErr_SetString(PyExc_IndexError, "invalid channel index");
+				goto err;
+			}
 			/* Get the value string. */
 			/* key defined channel id, value defined term type*/
 			if ((py_object_to_str_alloc(py_value, &term_str)) != SRD_OK) {
@@ -830,7 +837,13 @@ static int create_term_list(PyObject *py_dict, GSList **term_list, gboolean cur_
 			if (term != NULL){
                 memset(term, 0, sizeof(struct srd_term));
 				term->type = get_term_type(term_str);
-				term->channel = PyLong_AsLong(py_key);
+				term->channel = channel;
+				if (term->type < 0) {
+					srd_err("Unknown wait condition '%s'.", term_str);
+					g_free(term_str);
+					g_free(term);
+					goto err;
+				}
 			}
 			else{
 				srd_err("%s,ERROR:failed to alloc memory.", __func__);
@@ -840,7 +853,11 @@ static int create_term_list(PyObject *py_dict, GSList **term_list, gboolean cur_
 
 		} else if (PyUnicode_Check(py_key)) {
 			/* The key is a string. */
-			/* TODO: Check if it's "skip". */
+			if (PyUnicode_CompareWithASCIIString(py_key, "skip") != 0) {
+				srd_err("Unknown wait condition key.");
+				PyErr_SetString(PyExc_KeyError, "expected 'skip' condition key");
+				goto err;
+			}
 			if ((py_object_to_uint(py_value, &num_samples_to_skip)) != SRD_OK) {
 				srd_err("Failed to get number of samples to skip.");
 				goto err;
@@ -964,7 +981,8 @@ static int set_new_condition_list(struct srd_decoder_inst *di, PyObject *args)
 		}
 
 		/* Create the list of terms in this condition. */
-        if ((ret = create_term_list(py_dict, &term_list, di->abs_cur_matched)) < 0)
+		if ((ret = create_term_list(py_dict, &term_list, di->abs_cur_matched,
+				di->dec_num_channels)) < 0)
 			break;
 
 		/* Add the new condition to the PD instance's condition list. */
