@@ -61,6 +61,8 @@ struct sr_lib_context
 	struct sr_dev_inst *actived_device_instance;
 	GThread *hotplug_thread;
 	GThread *collect_thread;
+    gint collecting;
+    pthread_cond_t callbacks_done;
 	ds_datafeed_callback_t data_forward_callback;
 	int callback_thread_count;
 	int is_delay_destory_actived_device;
@@ -130,9 +132,10 @@ SR_API int ds_lib_init()
 	ret = sr_init(&lib_ctx.sr_ctx);
 	if (ret != SR_OK)
 	{
+        sr_log_uninit();
 		return ret;
 	}
-	lib_ctx.lib_exit_flag = 0;
+	g_atomic_int_set(&lib_ctx.lib_exit_flag, 0);
 
 	// Init trigger.
 	ds_trigger_init();
@@ -144,10 +147,15 @@ SR_API int ds_lib_init()
 		if (sr_driver_init(lib_ctx.sr_ctx, *dr) != SR_OK)
 		{
 			sr_err("Failed to initialize driver '%s'", (*dr)->name);
+            ds_trigger_destroy();
+            sr_exit(lib_ctx.sr_ctx);
+            lib_ctx.sr_ctx = NULL;
+            sr_log_uninit();
 			return SR_ERR;
 		}
 	}
 	pthread_mutex_init(&lib_ctx.mutext, NULL); // init locker
+    pthread_cond_init(&lib_ctx.callbacks_done, NULL);
 
 	make_demo_device_to_list();
 
@@ -203,7 +211,7 @@ SR_API int ds_lib_exit()
 	ds_release_actived_device();
 	sr_close_hotplug(lib_ctx.sr_ctx);
 
-	lib_ctx.lib_exit_flag = 1; // all thread to exit
+	g_atomic_int_set(&lib_ctx.lib_exit_flag, 1); // all thread to exit
 
 	if (lib_ctx.hotplug_thread != NULL)
 	{
@@ -227,8 +235,15 @@ SR_API int ds_lib_exit()
 	}
 	g_safe_free_list(lib_ctx.device_list);
 
+    pthread_mutex_lock(&lib_ctx.mutext);
+    while (lib_ctx.callback_thread_count)
+        pthread_cond_wait(&lib_ctx.callbacks_done, &lib_ctx.mutext);
+    pthread_mutex_unlock(&lib_ctx.mutext);
+    pthread_cond_destroy(&lib_ctx.callbacks_done);
 	pthread_mutex_destroy(&lib_ctx.mutext); // uninit locker
 
+    g_clear_pointer(&lib_ctx.attach_device_handle, libusb_unref_device);
+    g_clear_pointer(&lib_ctx.detach_device_handle, libusb_unref_device);
 	// Uninit trigger.
 	ds_trigger_destroy();
 
@@ -238,7 +253,6 @@ SR_API int ds_lib_exit()
 	}
 	lib_ctx.sr_ctx = NULL;
 
-	sr_hw_cleanup_all();
 
 	sr_log_uninit(); // try uninit log
 
@@ -252,7 +266,7 @@ SR_API void ds_set_firmware_resource_dir(const char *dir)
 {  
 	memset(DS_RES_PATH, 0, sizeof(DS_RES_PATH));
 	if (dir)
-		strcpy(DS_RES_PATH, dir);
+		g_strlcpy(DS_RES_PATH, dir, sizeof(DS_RES_PATH));
 }
 
 /**
@@ -262,7 +276,7 @@ SR_API void ds_set_user_data_dir(const char *dir)
 { 
 	memset(DS_USR_PATH, 0, sizeof(DS_USR_PATH));
 	if (dir)
-		strcpy(DS_USR_PATH, dir);
+		g_strlcpy(DS_USR_PATH, dir, sizeof(DS_USR_PATH));
 }
 
 /**
@@ -434,7 +448,8 @@ SR_API int ds_active_device(ds_device_handle handle)
 			}
 			else
 			{  
-				// Failed to switch new device.
+				// Preserve the requested-device error even if the UI falls back.
+                const int open_error = ret;
 				if(lib_ctx.device_list != NULL && old_dev == NULL){
 					old_dev = lib_ctx.device_list->data;					
 				}
@@ -451,7 +466,8 @@ SR_API int ds_active_device(ds_device_handle handle)
 					}
 				
 					lib_ctx.actived_device_instance = old_dev;
-					ret = open_device_instance(old_dev);
+					open_device_instance(old_dev);
+                    ret = open_error;
 				}	
 			}
 			break;
@@ -787,8 +803,13 @@ SR_API int ds_start_collect()
 		return SR_ERR_CALL_STATUS;
 	}
 
+    if (lib_ctx.collect_thread) {
+        g_thread_join(lib_ctx.collect_thread);
+        lib_ctx.collect_thread = NULL;
+    }
+
 	// Create new session.
-	sr_session_new();
+	if (sr_session_new() != SR_OK) return SR_ERR_MALLOC;
 
 	if (di->status != SR_ST_ACTIVE)
 	{
@@ -801,6 +822,7 @@ SR_API int ds_start_collect()
 	}
 
 
+    g_atomic_int_set(&lib_ctx.collecting, 1);
 	lib_ctx.collect_thread = g_thread_new("collect_proc", collect_run_proc, (gpointer)0);
 
 	return SR_OK;
@@ -828,7 +850,7 @@ static gpointer collect_run_proc(gpointer data)
 		goto END;
 	}
 
-	ret = di->driver->dev_acquisition_start(di, (void *)di);
+	ret = ds_core_start_device(di);
 	if (ret != SR_OK)
 	{
 		sr_err("Failed to start acquisition of device in "
@@ -853,7 +875,6 @@ static gpointer collect_run_proc(gpointer data)
 
 END:
 	sr_info("Collect thread end.");
-	lib_ctx.collect_thread = NULL;
 
 	if (bError)
 		send_event(DS_EV_COLLECT_TASK_END_BY_ERROR);
@@ -863,6 +884,7 @@ END:
 		send_event(DS_EV_COLLECT_TASK_END); // Normal end.
 
 	lib_ctx.is_stop_by_detached = 0;
+    g_atomic_int_set(&lib_ctx.collecting, 0);
 
 	return NULL;
 }
@@ -871,36 +893,18 @@ END:
  * Stop collect data, but not close the device.
  */
 SR_API int ds_stop_collect()
-{ 
-	sr_info("Stop collect.");
-
-	if (!ds_is_collecting())
-	{
-		sr_err("It's not collecting now.");
-		return SR_ERR_CALL_STATUS;
-	}
-
-	// Stop current session.
-	sr_session_stop();
-
-	// Wait the collect thread ends.
-	if (lib_ctx.collect_thread != NULL)
-		g_thread_join(lib_ctx.collect_thread);
-	lib_ctx.collect_thread = NULL;
-
-	return SR_OK;
+{
+    if (ds_is_collecting()) sr_session_stop();
+    if (lib_ctx.collect_thread && lib_ctx.collect_thread != g_thread_self()) {
+        g_thread_join(lib_ctx.collect_thread);
+        lib_ctx.collect_thread = NULL;
+    }
+    return SR_OK;
 }
 
-/**
- * Check if the device is collecting.
- */
 SR_API int ds_is_collecting()
 {
-	if (lib_ctx.collect_thread != NULL)
-	{
-		return 1;
-	}
-	return 0;
+    return g_atomic_int_get(&lib_ctx.collecting);
 }
 
 SR_API int ds_release_actived_device()
@@ -909,7 +913,7 @@ SR_API int ds_release_actived_device()
 		return SR_ERR_CALL_STATUS;
 	}
 
-	if (ds_is_collecting()){
+	if (lib_ctx.collect_thread){
 		ds_stop_collect();
 	}
 
@@ -1177,6 +1181,12 @@ SR_PRIV int sr_usb_device_is_exists(libusb_device *usb_dev)
 /**
  * Forward the data.
  */
+static void forward_to_frontend(const void *device, const void *packet)
+{
+    if (lib_ctx.data_forward_callback)
+        lib_ctx.data_forward_callback(device, packet);
+}
+
 SR_PRIV int ds_data_forward(const struct sr_dev_inst *sdi,
 							const struct sr_datafeed_packet *packet)
 {
@@ -1193,8 +1203,7 @@ SR_PRIV int ds_data_forward(const struct sr_dev_inst *sdi,
 	}
 
 	if (lib_ctx.data_forward_callback != NULL){
-		lib_ctx.data_forward_callback(sdi, packet);
-		return SR_OK;
+		return ds_core_forward(sdi, packet, forward_to_frontend);
 	}
 	return SR_ERR;
 }
@@ -1240,7 +1249,9 @@ static int update_device_handle(struct libusb_device *old_dev, struct libusb_dev
 
 			bus = libusb_get_bus_number(new_dev);
 			address = libusb_get_device_address(new_dev);
-			usb_dev_info->usb_dev = new_dev;
+			libusb_device *previous = usb_dev_info->usb_dev;
+            usb_dev_info->usb_dev = libusb_ref_device(new_dev);
+            if (previous) libusb_unref_device(previous);
 			usb_dev_info->bus = bus;
 			usb_dev_info->address = address;
 			dev->handle = (ds_device_handle)new_dev;
@@ -1271,6 +1282,7 @@ static int update_device_handle(struct libusb_device *old_dev, struct libusb_dev
 static void hotplug_event_listen_callback(struct libusb_context *ctx, struct libusb_device *dev, int event)
 {
 	int bDone = 0;
+    gboolean owns_device = dev == NULL;
 
 	(void)ctx;
 
@@ -1313,13 +1325,14 @@ static void hotplug_event_listen_callback(struct libusb_context *ctx, struct lib
 				{
 					sr_err("Update reconnected device handle error! can't find the old.");
 				}
-				lib_ctx.detach_device_handle = NULL;
+				g_clear_pointer(&lib_ctx.detach_device_handle, libusb_unref_device);
 			}
 		}
 		if (bDone == 0)
 		{
 			lib_ctx.attach_event_flag = 1; // Is a new device attched.
-			lib_ctx.attach_device_handle = dev;
+			g_clear_pointer(&lib_ctx.attach_device_handle, libusb_unref_device);
+            lib_ctx.attach_device_handle = libusb_ref_device(dev);
 		}
 		lib_ctx.is_waitting_reconnect = 0;
 	}
@@ -1339,7 +1352,7 @@ static void hotplug_event_listen_callback(struct libusb_context *ctx, struct lib
 		{
 			sr_info("The collecting device is detached, will stop the collect thread.");
 			lib_ctx.is_stop_by_detached = 1;
-			ds_release_actived_device();
+			sr_session_stop(); /* Defer destruction until the capture worker exits. */
 		}
 
 		/**
@@ -1347,12 +1360,14 @@ static void hotplug_event_listen_callback(struct libusb_context *ctx, struct lib
 		 */
 		lib_ctx.is_waitting_reconnect = 1;
 		lib_ctx.check_reconnect_times = 0;
-		lib_ctx.detach_device_handle = dev;
+		g_clear_pointer(&lib_ctx.detach_device_handle, libusb_unref_device);
+        lib_ctx.detach_device_handle = libusb_ref_device(dev);
 	}
 	else
 	{
 		sr_err("Unknown usb device event");
 	}
+    if (owns_device) libusb_unref_device(dev);
 }
 
 static void process_attach_event(int isEvent)
@@ -1379,7 +1394,7 @@ static void process_attach_event(int isEvent)
 
 		if (dr->driver_type == DRIVER_TYPE_HARDWARE)
 		{
-			dev_list = dr->scan(NULL);
+			dev_list = ds_core_scan_driver(dr, NULL);
 
 			if (dev_list != NULL){
 				pthread_mutex_lock(&lib_ctx.mutext);
@@ -1419,7 +1434,7 @@ static void process_attach_event(int isEvent)
 		post_event_async(DS_EV_NEW_DEVICE_ATTACH);
 	}
 
-	lib_ctx.attach_device_handle = NULL;
+	g_clear_pointer(&lib_ctx.attach_device_handle, libusb_unref_device);
 }
 
 static void process_detach_event()
@@ -1475,6 +1490,7 @@ static void process_detach_event()
 	if (bFind){
 		post_event_async(ev);
 	}	
+    libusb_unref_device(ev_dev);
 }
 
 static gpointer usb_hotplug_process_proc(gpointer data)
@@ -1485,7 +1501,7 @@ static gpointer usb_hotplug_process_proc(gpointer data)
 
 	int cur_trans_id = 0;
 
-	while (!lib_ctx.lib_exit_flag)
+	while (!g_atomic_int_get(&lib_ctx.lib_exit_flag))
 	{
 		sr_hotplug_wait_timout(lib_ctx.sr_ctx);
 
@@ -1527,16 +1543,10 @@ static gpointer usb_hotplug_process_proc(gpointer data)
 		}
 	}
 
-	if (lib_ctx.callback_thread_count > 0)
-	{
-		sr_info("%d callback thread is actived, waiting all ends...", lib_ctx.callback_thread_count);
-	}
-
-	// Wait all callback thread end.
-	while (lib_ctx.callback_thread_count > 0)
-	{
-		xsleep(100);
-	}
+    pthread_mutex_lock(&lib_ctx.mutext);
+    while (lib_ctx.callback_thread_count)
+        pthread_cond_wait(&lib_ctx.callbacks_done, &lib_ctx.mutext);
+    pthread_mutex_unlock(&lib_ctx.mutext);
 
 	sr_info("Hotplug thread end!");
 
@@ -1558,7 +1568,7 @@ static void make_demo_device_to_list()
 
 		if (dr->driver_type == DRIVER_TYPE_DEMO)
 		{
-			dev_list = dr->scan(NULL);
+			dev_list = ds_core_scan_driver(dr, NULL);
 
 			if (dev_list != NULL)
 			{
@@ -1587,7 +1597,7 @@ static void destroy_device_instance(struct sr_dev_inst *dev)
 	if (driver_ins->dev_destroy)
 		driver_ins->dev_destroy(dev);
 	else if (driver_ins->dev_close)
-		driver_ins->dev_close(dev);
+		ds_core_close_device(dev);
 }
 
 static void close_device_instance(struct sr_dev_inst *dev)
@@ -1601,7 +1611,7 @@ static void close_device_instance(struct sr_dev_inst *dev)
 	driver_ins = dev->driver;
 
 	if (driver_ins->dev_close)
-		driver_ins->dev_close(dev);
+		ds_core_close_device(dev);
 }
 
 static int open_device_instance(struct sr_dev_inst *dev)
@@ -1617,7 +1627,7 @@ static int open_device_instance(struct sr_dev_inst *dev)
 	if (driver_ins->dev_open)
 	{
 		sr_info("To open device, name:\"%s\"", dev->name);
-		return driver_ins->dev_open(dev);
+		return ds_core_open_device(dev);
 	}
 
 	return SR_ERR_CALL_STATUS;
@@ -1632,6 +1642,7 @@ static gpointer post_event_proc(gpointer event)
 
 	pthread_mutex_lock(&lib_ctx.mutext);
 	lib_ctx.callback_thread_count--;
+    pthread_cond_broadcast(&lib_ctx.callbacks_done);
 	pthread_mutex_unlock(&lib_ctx.mutext);
 
 	return NULL;
@@ -1643,7 +1654,7 @@ static void post_event_async(int event)
 	lib_ctx.callback_thread_count++;
 	pthread_mutex_unlock(&lib_ctx.mutext);
 
-	g_thread_new("callback_thread", post_event_proc, (gpointer)((unsigned long)event));
+	g_thread_unref(g_thread_new("callback_thread", post_event_proc, (gpointer)((unsigned long)event)));
 }
 
 static void send_event(int event)
@@ -1682,7 +1693,7 @@ static struct libusb_device* get_new_attached_usb_device()
 		}
 
 		if (bFind == 0){
-			dev = array[i];
+			dev = libusb_ref_device(array[i]);
 			break;
 		}
 	}
@@ -1693,6 +1704,7 @@ static struct libusb_device* get_new_attached_usb_device()
 		sr_info("Not found attached device.");
 	}
 
+	for (i = 0; i < num; i++) libusb_unref_device(array[i]);
 	return dev;
 }
 
@@ -1729,7 +1741,7 @@ static struct libusb_device* get_new_detached_usb_device()
 		}
 
 		if (bFind == 0){
-			dev = (libusb_device*)dev_ins->handle;
+			dev = libusb_ref_device((libusb_device*)dev_ins->handle);
 			break;
 		}
 	}		
@@ -1740,6 +1752,7 @@ static struct libusb_device* get_new_detached_usb_device()
 		sr_info("Not found detached device.");
 	}
 
+	for (i = 0; i < num; i++) libusb_unref_device(array[i]);
 	return dev;
 }
 

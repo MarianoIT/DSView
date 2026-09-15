@@ -1218,6 +1218,8 @@ struct DSL_context {
 	int submitted_transfers;
 	int empty_transfer_count;
     int instant_tail_bytes;
+    uint64_t instant_tail_words[128];
+    size_t instant_tail_received;
 
 	void *cb_data;
 	unsigned int num_transfers;
@@ -1438,6 +1440,7 @@ SR_PRIV int dsl_dev_acquisition_stop(const struct sr_dev_inst *sdi, void *cb_dat
 SR_PRIV int dsl_dev_status_get(const struct sr_dev_inst *sdi, struct sr_status *status, gboolean prg);
 
 SR_PRIV unsigned int dsl_get_timeout(const struct sr_dev_inst *sdi);
+SR_PRIV void dsl_abort_transfers(const struct sr_dev_inst *sdi);
 SR_PRIV int dsl_start_transfers(const struct sr_dev_inst *sdi);
 SR_PRIV int dsl_header_size(const struct DSL_context *devc);
 

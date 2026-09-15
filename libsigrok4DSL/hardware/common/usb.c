@@ -134,11 +134,12 @@ SR_PRIV GSList *sr_usb_find(libusb_context *usb_ctx, const char *conn)
 
         usb = sr_usb_dev_inst_new(libusb_get_bus_number(devlist[i]),
                     libusb_get_device_address(devlist[i]));
-        usb->usb_dev = devlist[i];
+        if (!usb) continue;
+        usb->usb_dev = libusb_ref_device(devlist[i]);
         
         devices = g_slist_append(devices, usb);
     }
-    libusb_free_device_list(devlist, 0);
+    libusb_free_device_list(devlist, 1);
 
     sr_dbg("Found %d device(s).", g_slist_length(devices));
 
@@ -198,14 +199,15 @@ SR_PRIV GSList *sr_usb_find_usbtmc(libusb_context *usb_ctx)
 
                 usb = sr_usb_dev_inst_new(libusb_get_bus_number(devlist[i]),
                             libusb_get_device_address(devlist[i]));
-                usb->usb_dev = devlist[i];
+                if (!usb) continue;
+                usb->usb_dev = libusb_ref_device(devlist[i]);
 
                 devices = g_slist_append(devices, usb);
             }
             libusb_free_config_descriptor(confdes);
         }
     }
-    libusb_free_device_list(devlist, 0);
+    libusb_free_device_list(devlist, 1);
 
     sr_dbg("Found %d device(s).", g_slist_length(devices));
 

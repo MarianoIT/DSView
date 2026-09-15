@@ -289,10 +289,10 @@ void Calibration::set_value(int value)
 void Calibration::on_save()
 {
     this->hide();
-    QFuture<void> future;
+    QFuture<bool> future;
 
     future = QtConcurrent::run([&]{
-        _device_agent->set_config_bool( SR_CONF_ZERO_SET, true);
+        return _device_agent->set_config_bool(SR_CONF_ZERO_SET, true);
     });
 
     Qt::WindowFlags flags = Qt::CustomizeWindowHint;
@@ -305,12 +305,16 @@ void Calibration::on_save()
                        Qt::WindowMinimizeButtonHint | Qt::WindowMaximizeButtonHint);
     dlg.setCancelButton(NULL);
 
-    QFutureWatcher<void> watcher;
+    QFutureWatcher<bool> watcher;
     connect(&watcher,SIGNAL(finished()),&dlg,SLOT(cancel()));
     watcher.setFuture(future);
 
     dlg.exec();
+    future.waitForFinished();
     this->show();
+    if (!future.result()) {
+        MsgBox::Show(tr("Calibration could not be saved. The instrument may not support storing all calibration values. Previous stored values may remain; check the device log."));
+    }
 }
 
 void Calibration::on_abort()

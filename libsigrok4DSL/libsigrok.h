@@ -22,6 +22,7 @@
 
 #include <sys/time.h>
 #include <stdio.h>
+#include "namespace.h"
 #include <stdint.h>
 #include <inttypes.h>
 #include <glib.h>  

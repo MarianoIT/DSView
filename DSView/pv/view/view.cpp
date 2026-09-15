@@ -586,13 +586,16 @@ void View::normalize_layout()
           v_min = min(t->get_v_offset(), v_min);
     }
 
-	const int delta = -min(v_min, 0);
+    const int64_t delta = -std::min<int64_t>(v_min, 0);
 
     for(auto t : traces){
-        t->set_v_offset(t->get_v_offset() + delta);
+        // INT_MAX denotes a trace that has not been laid out yet.
+        if (t->get_v_offset() == INT_MAX) continue;
+        const int64_t position = static_cast<int64_t>(t->get_v_offset()) + delta;
+        t->set_v_offset(static_cast<int>(std::min<int64_t>(position, INT_MAX - 1)));
     }        
 
-    verticalScrollBar()->setSliderPosition(delta);
+    verticalScrollBar()->setSliderPosition(static_cast<int>(std::min<int64_t>(delta, INT_MAX)));
 	v_scroll_value_changed(verticalScrollBar()->sliderPosition());
 }
 

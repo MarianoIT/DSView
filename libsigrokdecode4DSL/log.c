@@ -49,13 +49,11 @@ SRD_PRIV void srd_log_init()
  */
 SRD_PRIV void srd_log_uninit()
 {
-    if (is_private_log && log_ctx){
-        xlog_free(log_ctx);
-        log_ctx = 0;
-        xlog_free_writer(srd_log);
-        srd_log = 0;
-        is_private_log = 0;
-    }
+    xlog_free_writer(srd_log);
+    srd_log = NULL;
+    if (is_private_log && log_ctx) xlog_free(log_ctx);
+    log_ctx = NULL;
+    is_private_log = 0;
 }
 
 /**

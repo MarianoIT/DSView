@@ -35,7 +35,7 @@
 #include "../ui/uimanager.h"
 
 class DeviceAgent;
-struct sr_channel;
+#include <libsigrok.h>
 
 namespace pv {
 

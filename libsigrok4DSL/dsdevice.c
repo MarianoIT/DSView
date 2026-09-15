@@ -228,8 +228,13 @@ SR_PRIV void sr_dev_inst_free(struct sr_dev_inst *sdi)
 	if (sdi == NULL)
 		return;
 
+	ds_core_forget_device(sdi);
 	sr_dev_probes_free(sdi);
 	
+    if (sdi->dev_type == DEV_TYPE_USB) {
+        sr_usb_dev_inst_free(sdi->conn);
+        sdi->conn = NULL;
+    }
 	safe_free(sdi->conn);
 	safe_free(sdi->priv);
 	safe_free(sdi->vendor);
@@ -259,9 +264,10 @@ SR_PRIV struct sr_usb_dev_inst *sr_usb_dev_inst_new(uint8_t bus, uint8_t address
 /** @private */
 SR_PRIV void sr_usb_dev_inst_free(struct sr_usb_dev_inst *usb)
 {
-	(void)usb;
-
-	/* Nothing to do for this device instance type. */
+    if (!usb) return;
+    if (usb->devhdl) libusb_close(usb->devhdl);
+    if (usb->usb_dev) libusb_unref_device(usb->usb_dev);
+    g_free(usb);
 }
 
 /**

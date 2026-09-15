@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <glib.h>
+#include "../sigrok/core.h"
 #include <log/xlog.h>
 
 extern "C" {
@@ -48,24 +49,28 @@ void data_callback(const sr_dev_inst *, const sr_datafeed_packet *packet)
         return;
 
     capture_summary->packets++;
+    if (packet->status != SR_PKT_OK) { capture_summary->failed = true; return; }
     switch (packet->type) {
     case SR_DF_DSO:
     {
         const auto *dso = static_cast<const sr_datafeed_dso *>(packet->payload);
         capture_summary->dso_samples += dso->num_samples;
         const auto *data = static_cast<const uint8_t *>(dso->data);
-        const uint64_t channel_count = g_slist_length(dso->probes);
-        uint64_t channel_offset = 0;
-        uint64_t probe_index = 0;
-        for (const GSList *probe = dso->probes; probe; probe = probe->next, probe_index++) {
+        uint64_t channel_count = 0, channel_offset = 0;
+        bool selected = false;
+        for (const GSList *probe = dso->probes; probe; probe = probe->next) {
             const auto *channel = static_cast<const sr_channel *>(probe->data);
+            if (!channel->enabled) continue;
             if (channel->index == capture_summary->channel_index) {
-                channel_offset = probe_index;
-                break;
+                channel_offset = channel_count;
+                selected = true;
             }
+            channel_count++;
         }
-        if (channel_count == 0)
+        if (!channel_count || !selected || !data || dso->num_samples < 0) {
+            capture_summary->failed = true;
             return;
+        }
         for (int index = 0; index < dso->num_samples; index++) {
             const uint8_t value = data[index * channel_count + channel_offset];
             capture_summary->dso_channel0_samples.push_back(value);
@@ -119,9 +124,10 @@ void print_error(const std::string &code, const std::string &message)
 void print_usage()
 {
     std::cerr << "Usage:\n"
+              << "  dsview-cli --version\n"
               << "  dsview-cli devices list\n"
               << "  dsview-cli capture run [--device-index N] [--mode dso|logic]"
-              << " [--samplerate HZ] [--samples N] [--channel N] [--timeout-ms N]\n";
+              << " [--samplerate HZ] [--samples N] [--channel N] [--timeout-ms N] [--trigger-source auto|channel]\n";
     std::cerr << "  dsview-cli decode clock --input FILE --samplerate HZ\n";
 }
 
@@ -196,6 +202,7 @@ int capture_run(int argc, char *argv[])
     uint64_t channel = 0;
     uint64_t timeout_ms = 5000;
     int16_t mode = DSO;
+    uint8_t trigger_source = DSO_TRIGGER_CH0;
     std::string output_path;
 
     for (int index = 3; index < argc; index++) {
@@ -204,6 +211,13 @@ int capture_run(int argc, char *argv[])
             return 1;
         }
         const std::string option = argv[index++];
+        if (option == "--trigger-source") {
+            const std::string value = argv[index];
+            if (value == "auto") trigger_source = DSO_TRIGGER_AUTO;
+            else if (value == "channel") trigger_source = DSO_TRIGGER_CH0;
+            else { print_error("invalid_argument", "Trigger source must be auto or channel"); return 1; }
+            continue;
+        }
         if (option == "--mode") {
             const std::string value = argv[index];
             if (value == "dso")
@@ -243,7 +257,18 @@ int capture_run(int argc, char *argv[])
         }
     }
 
-    if (ds_active_device_by_index(static_cast<int>(device_index)) != SR_OK) {
+    ds_device_base_info *devices = nullptr;
+    int device_count = 0;
+    if (ds_get_device_list(&devices, &device_count) != SR_OK ||
+        device_index >= static_cast<uint64_t>(device_count)) {
+        g_free(devices);
+        print_error("device_select_failed", "Selected device is not in the device list");
+        return 1;
+    }
+    const ds_device_handle selected_handle = devices[device_index].handle;
+    const std::string selected_name = devices[device_index].name;
+    g_free(devices);
+    if (ds_active_device(selected_handle) != SR_OK) {
         print_error("device_select_failed", "Unable to open the selected device");
         return 1;
     }
@@ -253,14 +278,14 @@ int capture_run(int argc, char *argv[])
     const double configured_trigger_voltage = 1.0;
     if (!set_config_int16(SR_CONF_DEVICE_MODE, mode))
         failed_setting = "mode";
+    else if (mode == DSO && !set_config_bool(SR_CONF_INSTANT, true))
+        failed_setting = "instant";
     else if (!set_config_uint64(SR_CONF_SAMPLERATE, samplerate))
         failed_setting = "samplerate";
     else if (!set_config_uint64(SR_CONF_LIMIT_SAMPLES, samples))
         failed_setting = "samples";
     else if (ds_enable_device_channel_index(static_cast<int>(channel), TRUE) != SR_OK)
         failed_setting = "channel";
-    else if (mode == DSO && !set_config_bool(SR_CONF_INSTANT, true))
-        failed_setting = "instant";
     else if (mode == DSO) {
         ds_device_full_info trigger_info{};
         const sr_channel *trigger_channel = nullptr;
@@ -296,7 +321,7 @@ int capture_run(int argc, char *argv[])
             requested_trigger_level < trigger_ref_min ? trigger_ref_min :
             requested_trigger_level > trigger_ref_max ? trigger_ref_max :
             requested_trigger_level);
-        if (!set_config_byte(SR_CONF_TRIGGER_SOURCE, DSO_TRIGGER_CH0) ||
+        if (!set_config_byte(SR_CONF_TRIGGER_SOURCE, trigger_source) ||
             !set_channel_config_byte(trigger_channel, SR_CONF_TRIGGER_VALUE,
                 configured_trigger_level))
             failed_setting = "trigger";
@@ -323,8 +348,7 @@ int capture_run(int argc, char *argv[])
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     const bool timed_out = !summary.complete;
-    if (ds_is_collecting())
-        ds_stop_collect();
+    ds_stop_collect(); // Join the completed worker before reading its buffers.
 
     double voltage_min = 0;
     double voltage_max = 0;
@@ -423,6 +447,7 @@ int capture_run(int argc, char *argv[])
 
     std::cout << "{\"ok\":true,\"capture\":{\"mode\":\""
               << (mode == DSO ? "dso" : "logic")
+              << "\",\"device\":\"" << selected_name
               << "\",\"samplerate\":" << samplerate
               << ",\"configured_samples\":" << samples
               << ",\"dso_samples\":" << summary.dso_samples
@@ -517,6 +542,10 @@ int decode_clock(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
+    if (argc == 2 && std::strcmp(argv[1], "--version") == 0) {
+        std::cout << "dsview-cli libsigrok " << dsl_core_version() << std::endl;
+        return 0;
+    }
     if (argc < 3) {
         print_usage();
         return 1;

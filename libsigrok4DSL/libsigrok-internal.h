@@ -100,6 +100,8 @@ struct lang_text_map_item{
 	const char *cn_name;
 };
 
+struct dsl_core_driver;
+
 struct sr_dev_driver {
 	/* Driver-specific */
 	char *name;
@@ -136,6 +138,7 @@ struct sr_dev_driver {
 
 	/* Dynamic */
 	void *priv;
+    struct dsl_core_driver *core_driver;
 };
 
 struct sr_dev_inst {
@@ -178,31 +181,6 @@ struct sr_dev_inst {
     void *priv;
 
 	int actived_times;
-};
-
-struct sr_session 
-{ 
-    gboolean running;
-
-	unsigned int num_sources;
-
-	/*
-	 * Both "sources" and "pollfds" are of the same size and contain pairs
-	 * of descriptor and callback function. We can not embed the GPollFD
-	 * into the source struct since we want to be able to pass the array
-	 * of all poll descriptors to g_poll().
-	 */
-	struct source *sources;
-	GPollFD *pollfds;
-	int source_timeout;
-
-	/*
-	 * These are our synchronization primitives for stopping the session in
-	 * an async fashion. We need to make sure the session is stopped from
-	 * within the session thread itself.
-	 */
-    GMutex stop_mutex;
-	gboolean abort_session;
 };
 
 struct sr_usb_dev_inst {
@@ -298,13 +276,7 @@ SR_PRIV int usb_hotplug_callback(struct libusb_context *ctx, struct libusb_devic
 
 SR_PRIV int sr_session_source_add(int fd, int events, int timeout,
 		sr_receive_data_callback_t cb, const struct sr_dev_inst *sdi);
-SR_PRIV int sr_session_source_add_pollfd(GPollFD *pollfd, int timeout,
-		sr_receive_data_callback_t cb, const struct sr_dev_inst *sdi);
-SR_PRIV int sr_session_source_add_channel(GIOChannel *channel, int events,
-		int timeout, sr_receive_data_callback_t cb, const struct sr_dev_inst *sdi);
 SR_PRIV int sr_session_source_remove(int fd);
-SR_PRIV int sr_session_source_remove_pollfd(GPollFD *pollfd);
-SR_PRIV int sr_session_source_remove_channel(GIOChannel *channel); 
 
 /*--- std.c -----------------------------------------------------------------*/
 
@@ -393,7 +365,7 @@ SR_PRIV int sr_driver_init(struct sr_context *ctx,
 /*----- Session ------*/ 
 SR_PRIV int sr_session_run(void);
 SR_PRIV int sr_session_stop(void); 
-SR_PRIV struct sr_session *sr_session_new(void);
+SR_PRIV int sr_session_new(void);
 SR_PRIV int sr_session_destroy(void);
 
 /**
@@ -454,4 +426,15 @@ SR_PRIV int sr_dslogic_option_value_to_code(const struct sr_dev_inst *sdi, int c
 /*--- dscope.c ------------------------------------------------------------*/
 SR_PRIV int sr_dscope_option_value_to_code(const struct sr_dev_inst *sdi, int config_id, const char *value);
  
+int ds_core_init_context(struct sr_context *context);
+void ds_core_exit_context(void);
+int ds_core_register_driver(struct sr_dev_driver *driver);
+GSList *ds_core_scan_driver(struct sr_dev_driver *driver, GSList *options);
+int ds_core_open_device(struct sr_dev_inst *device);
+int ds_core_close_device(struct sr_dev_inst *device);
+void ds_core_forget_device(struct sr_dev_inst *device);
+int ds_core_start_device(struct sr_dev_inst *device);
+int ds_core_forward(const struct sr_dev_inst *device, const struct sr_datafeed_packet *packet,
+    void (*callback)(const void *, const void *));
+
 #endif

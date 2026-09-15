@@ -148,14 +148,16 @@ struct cmd_zero_info {
     uint8_t trans0;
     uint8_t trans1;
     uint8_t comb_comp;
+    /* Historical on-wire layout: 30 bytes, including digital gain.
+     * Combined ADC gains 2/3 were never included in the stored record. */
+    uint8_t digi_fgain_lo;
+    uint8_t digi_fgain_hi;
     uint8_t fgain0_code;
     uint8_t fgain1_code;
     uint8_t fgain2_code;
     uint8_t fgain3_code;
     uint8_t comb_fgain0_code;
     uint8_t comb_fgain1_code;
-    uint8_t comb_fgain2_code;
-    uint8_t comb_fgain3_code;
 };
 
 struct cmd_vga_info {

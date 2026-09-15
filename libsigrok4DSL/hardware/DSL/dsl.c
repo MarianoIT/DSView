@@ -2020,8 +2020,11 @@ SR_PRIV int dsl_dev_acquisition_stop(const struct sr_dev_inst *sdi, void *cb_dat
         devc->abort = TRUE;
         dsl_wr_reg(sdi, CTR0_ADDR, bmFORCE_RDY);
         sr_info("Send command:\"bmFORCE_RDY\"");
+        for (unsigned i = 0; i < devc->num_transfers; i++) {
+            if (devc->transfers[i]) libusb_cancel_transfer(devc->transfers[i]);
+        }
     }
-    else if (devc->status == DSL_FINISH) {
+    if (devc->status == DSL_FINISH) {
         /* Stop GPIF acquisition */
         wr_cmd.header.dest = DSL_CTL_STOP;
         wr_cmd.header.size = 0;
@@ -2160,17 +2163,18 @@ SR_PRIV unsigned int dsl_get_timeout(const struct sr_dev_inst *sdi)
 
 static void finish_acquisition(struct DSL_context *devc)
 {
-    struct sr_datafeed_packet packet;
+    struct sr_datafeed_packet packet = {0};
 
     sr_info("%s: send SR_DF_END packet", __func__);
     /* Terminate session. */
     packet.type = SR_DF_END;
-    packet.status = SR_PKT_OK;
+    packet.status = devc->status == DSL_ERROR ? SR_PKT_DATA_ERROR : SR_PKT_OK;
     ds_data_forward(devc->cb_data, &packet);
 
     if (devc->num_transfers != 0) {
         devc->num_transfers = 0;
         g_free(devc->transfers);
+        devc->transfers = NULL;
     }
 
     devc->status = DSL_FINISH;
@@ -2183,16 +2187,15 @@ static void free_transfer(struct libusb_transfer *transfer, int force)
 
     devc = transfer->user_data;
 
-    g_free(transfer->buffer);
-    transfer->buffer = NULL;
-    libusb_free_transfer(transfer);
-
     for (i = 0; i < devc->num_transfers; i++) {
         if (devc->transfers[i] == transfer) {
             devc->transfers[i] = NULL;
             break;
         }
     }
+
+    g_free(transfer->buffer);
+    libusb_free_transfer(transfer);
 
     if (!devc->is_loop || devc->status != DSL_DATA || force)
         devc->submitted_transfers--;
@@ -2210,8 +2213,9 @@ static void resubmit_transfer(struct libusb_transfer *transfer)
     if ((ret = libusb_submit_transfer(transfer)) == LIBUSB_SUCCESS)
         return;
 
-    free_transfer(transfer, 0);
-    /* TODO: Stop session? */
+    struct DSL_context *devc = transfer->user_data;
+    devc->status = DSL_ERROR;
+    free_transfer(transfer, 1);
 
     sr_err("%s: %s", __func__, libusb_error_name(ret));
 }
@@ -2307,10 +2311,10 @@ static void get_measure(const struct sr_dev_inst *sdi, uint8_t *buf, uint32_t of
 
 static void receive_transfer(struct libusb_transfer *transfer)
 {
-    struct sr_datafeed_packet packet;
-    struct sr_datafeed_logic logic;
-    struct sr_datafeed_dso dso;
-    struct sr_datafeed_analog analog;
+    struct sr_datafeed_packet packet = {0};
+    struct sr_datafeed_logic logic = {0};
+    struct sr_datafeed_dso dso = {0};
+    struct sr_datafeed_analog analog = {0};
     uint64_t cur_sample_count = 0;
 
     uint8_t *cur_buf = transfer->buffer;
@@ -2331,7 +2335,7 @@ static void receive_transfer(struct libusb_transfer *transfer)
     case LIBUSB_TRANSFER_TIMED_OUT: /* We may have received some data though. */
         break;
     default:
-        devc->status = DSL_ERROR;
+        devc->status = devc->abort ? DSL_STOP : DSL_ERROR;
         break;
     }
 
@@ -2351,36 +2355,59 @@ static void receive_transfer(struct libusb_transfer *transfer)
             logic.data = cur_buf;
         }
         else if (sdi->mode == DSO) {
-            if (!devc->instant) {
-                const uint32_t offset = devc->actual_samples / (channel_modes[devc->ch_mode].num/dsl_en_ch_num(sdi));
-                get_measure(sdi, cur_buf, offset);
+            const unsigned channels = dsl_en_ch_num(sdi);
+            const uint64_t data_bytes = devc->actual_samples * channels;
+            const size_t received = (size_t)transfer->actual_length;
+            if (!channels) {
+                devc->status = DSL_ERROR;
+            } else if (devc->instant) {
+                const uint64_t remaining = devc->num_bytes < data_bytes ? data_bytes - devc->num_bytes : 0;
+                const size_t sample_bytes = min((uint64_t)received, remaining);
+                cur_sample_count = sample_bytes / channels;
+                const uint64_t wanted = devc->num_samples < devc->limit_samples ?
+                    devc->limit_samples - devc->num_samples : 0;
+                dso.num_samples = min(cur_sample_count, wanted);
+                dso.data = cur_buf;
+                size_t tail_bytes = received - sample_bytes;
+                size_t tail_room = (size_t)devc->instant_tail_bytes - devc->instant_tail_received;
+                tail_bytes = min(tail_bytes, tail_room);
+                memcpy((uint8_t *)devc->instant_tail_words + devc->instant_tail_received,
+                    cur_buf + sample_bytes, tail_bytes);
+                devc->instant_tail_received += tail_bytes;
+                if (devc->instant_tail_received == (size_t)devc->instant_tail_bytes) {
+                    get_measure(sdi, (uint8_t *)devc->instant_tail_words, 0);
+                    devc->status = devc->mstatus_valid ? DSL_STOP : DSL_ERROR;
+                }
+            } else if (received >= data_bytes + (size_t)dsl_header_size(devc)) {
+                get_measure(sdi, cur_buf, data_bytes / 2);
+                if (!devc->mstatus_valid)
+                    sr_dbg("Invalid DSO metadata: id=%x divider=%u vlen=%u received=%zu data=%llu channels=%u rate=%llu",
+                        devc->mstatus.pkt_id, devc->mstatus.sample_divider, devc->mstatus.vlen, received,
+                        (unsigned long long)data_bytes, channels, (unsigned long long)devc->cur_samplerate);
+                const uint64_t skip = devc->zero ? 0 : 2 * devc->mstatus.trig_offset;
+                if (devc->mstatus_valid && skip <= data_bytes) {
+                    cur_sample_count = min((data_bytes - skip) / channels,
+                        min((uint64_t)channel_modes[devc->ch_mode].num * devc->mstatus.vlen / channels,
+                            devc->limit_samples));
+                    dso.num_samples = cur_sample_count;
+                    dso.data = cur_buf + skip;
+                    devc->roll = devc->mstatus.stream_mode != 0;
+                } else {
+                    packet.status = SR_PKT_DATA_ERROR;
+                }
+            } else {
+                devc->status = DSL_ERROR;
             }
-            else {
-                devc->mstatus.vlen = get_buffer_size(sdi) / channel_modes[devc->ch_mode].num;
-                devc->mstatus.trig_offset = 0;
-                devc->mstatus.sample_divider_tog = FALSE;
-                devc->mstatus_valid = TRUE;
-            }
-
-            if (devc->mstatus_valid) {
-                devc->roll = (devc->mstatus.stream_mode != 0);
-                packet.type = SR_DF_DSO;
-                packet.payload = &dso;
-                dso.probes = sdi->channels;
-                cur_sample_count = min(channel_modes[devc->ch_mode].num * devc->mstatus.vlen / dsl_en_ch_num(sdi), devc->limit_samples);
-                dso.num_samples = cur_sample_count;
-                dso.mq = SR_MQ_VOLTAGE;
-                dso.unit = SR_UNIT_VOLT;
-                dso.mqflags = SR_MQFLAG_AC;
-                dso.samplerate_tog = (devc->mstatus.sample_divider_tog != 0);
-                dso.trig_flag = (devc->mstatus.trig_flag != 0);
-                dso.trig_ch = devc->mstatus.trig_ch;
-                dso.data = cur_buf + (devc->zero ? 0 : 2*devc->mstatus.trig_offset);
-            }
-            else {
-                packet.type = SR_DF_DSO;
-                packet.status = SR_PKT_DATA_ERROR;
-            }
+            packet.type = SR_DF_DSO;
+            packet.payload = &dso;
+            dso.probes = sdi->channels;
+            dso.mq = SR_MQ_VOLTAGE;
+            dso.unit = SR_UNIT_VOLT;
+            dso.mqflags = SR_MQFLAG_AC;
+            dso.samplerate_tog = devc->mstatus.sample_divider_tog != 0;
+            dso.trig_flag = devc->mstatus.trig_flag != 0;
+            dso.trig_ch = devc->mstatus.trig_ch;
+            if (devc->status == DSL_ERROR) packet.status = SR_PKT_DATA_ERROR;
         }
         else if (sdi->mode == ANALOG) {
             packet.type = SR_DF_ANALOG;
@@ -2399,7 +2426,7 @@ static void receive_transfer(struct libusb_transfer *transfer)
         if ((devc->limit_samples && (devc->num_bytes < devc->actual_bytes || devc->is_loop) )
            || sdi->mode != LOGIC)
         {
-            if (!devc->is_loop){
+            if (sdi->mode == LOGIC && !devc->is_loop){
                 const uint64_t remain_length= devc->actual_bytes - devc->num_bytes;
                 logic.length = min(logic.length, remain_length);
             }
@@ -2410,23 +2437,12 @@ static void receive_transfer(struct libusb_transfer *transfer)
         }
 
         devc->num_samples += cur_sample_count;
-        devc->num_bytes += logic.length;
+        devc->num_bytes += sdi->mode == LOGIC ? logic.length : (uint64_t)transfer->actual_length;
         if (sdi->mode == LOGIC &&
             devc->limit_samples &&
             !devc->is_loop &&
             devc->num_bytes >= devc->actual_bytes) {
             devc->status = DSL_STOP;
-        } else if ((sdi->mode == DSO && devc->instant) &&
-                   devc->limit_samples &&
-                   devc->num_samples >= devc->actual_samples) {
-            int over_bytes = (devc->num_samples - devc->actual_samples) * dsl_en_ch_num(sdi);
-            if (over_bytes >= devc->instant_tail_bytes) {
-                const uint32_t offset = (transfer->actual_length - over_bytes) / 2;
-                get_measure(sdi, cur_buf, offset);
-                devc->status = DSL_STOP;
-            } else {
-
-            }
         }
     }
 
@@ -2441,7 +2457,7 @@ static void receive_transfer(struct libusb_transfer *transfer)
 static void receive_header(struct libusb_transfer *transfer)
 {
     struct DSL_context *devc;
-    struct sr_datafeed_packet packet;
+    struct sr_datafeed_packet packet = {0};
     struct ds_trigger_pos *trigger_pos;
     const struct sr_dev_inst *sdi;
     uint64_t remain_cnt;
@@ -2452,8 +2468,9 @@ static void receive_header(struct libusb_transfer *transfer)
     trigger_pos = (struct ds_trigger_pos *)transfer->buffer;
 
     if (devc->status != DSL_ABORT)
-        devc->status = DSL_ERROR;
+        devc->status = devc->abort ? DSL_STOP : DSL_ERROR;
     if (!devc->abort && transfer->status == LIBUSB_TRANSFER_COMPLETED &&
+        transfer->actual_length == dsl_header_size(devc) &&
         trigger_pos->check_id == TRIG_CHECKID) {
         sr_info("%llu: receive_trigger_pos(): status %d; timeout %d; received %d bytes.",
             (u64_t)g_get_monotonic_time(), transfer->status, transfer->timeout, transfer->actual_length);
@@ -2487,76 +2504,62 @@ static void receive_header(struct libusb_transfer *transfer)
     free_transfer(transfer, 1);
 }
 
+/* Cancel and drain before freeing a device or returning a failed start.
+ * libusb owns submitted transfers until their completion callbacks run. */
+SR_PRIV void dsl_abort_transfers(const struct sr_dev_inst *sdi)
+{
+    struct DSL_context *devc = sdi->priv;
+    struct drv_context *drvc = sdi->driver->priv;
+    devc->abort = TRUE;
+    devc->status = DSL_STOP;
+    for (unsigned i = 0; i < devc->num_transfers; i++) {
+        if (devc->transfers[i]) libusb_cancel_transfer(devc->transfers[i]);
+    }
+    while (devc->submitted_transfers) {
+        struct timeval timeout = {0, 10000};
+        int ret = libusb_handle_events_timeout(drvc->sr_ctx->libusb_ctx, &timeout);
+        if (ret && ret != LIBUSB_ERROR_INTERRUPTED)
+            sr_err("Draining cancelled USB transfers: %s", libusb_error_name(ret));
+    }
+    g_clear_pointer(&devc->transfers, g_free);
+    devc->num_transfers = 0;
+}
+
 SR_PRIV int dsl_start_transfers(const struct sr_dev_inst *sdi)
 {
-    struct DSL_context *devc;
-    struct sr_usb_dev_inst *usb;
-    struct libusb_transfer *transfer;
-    unsigned int i, num_transfers;
-    int ret;
-    unsigned char *buf;
-    size_t size;
-    struct ds_trigger_pos *trigger_pos;
+    struct DSL_context *devc = sdi->priv;
+    struct sr_usb_dev_inst *usb = sdi->conn;
+    unsigned count = get_number_of_transfers(sdi) + 1;
+    size_t size = get_buffer_size(sdi);
+    int result = SR_ERR_MALLOC;
 
-    devc = sdi->priv;
-    usb = sdi->conn;
-
-    num_transfers = get_number_of_transfers(sdi);
-    size = get_buffer_size(sdi);
-
-    /* trigger packet transfer */
-    if (!(trigger_pos = g_try_malloc0(dsl_header_size(devc)))) {
-        sr_err("%s: USB trigger_pos buffer malloc failed.", __func__);
-        return SR_ERR_MALLOC;
-    }
-
-    devc->transfers = g_try_malloc0(sizeof(*devc->transfers) * (num_transfers + 1));
-    if (!devc->transfers) {
-        sr_err("%s: USB transfer malloc failed.", __func__);
-        return SR_ERR_MALLOC;
-    }
-    transfer = libusb_alloc_transfer(0);
-    libusb_fill_bulk_transfer(transfer, usb->devhdl,
-            6 | LIBUSB_ENDPOINT_IN, (unsigned char *)trigger_pos, dsl_header_size(devc),
-            (libusb_transfer_cb_fn)receive_header, devc, 0);
-    if ((ret = libusb_submit_transfer(transfer)) != 0) {
-        sr_err("%s: Failed to submit trigger_pos transfer: %s.",
-               __func__, libusb_error_name(ret));
-        libusb_free_transfer(transfer);
-        g_free(trigger_pos);
-        devc->status = DSL_ERROR;
-        return SR_ERR;
-    } else {
-        devc->num_transfers++;
-        devc->transfers[0] = transfer;
-        devc->submitted_transfers++;
-    }
-
-    /* data packet transfer */
-    for (i = 1; i <= num_transfers; i++) {
-        if (!(buf = g_try_malloc0(size))) {
-            sr_err("%s: USB transfer buffer malloc failed.", __func__);
-            return SR_ERR_MALLOC;
-        }
-        transfer = libusb_alloc_transfer(0);
+    devc->transfers = g_try_new0(struct libusb_transfer *, count);
+    if (!devc->transfers) return SR_ERR_MALLOC;
+    for (unsigned i = 0; i < count; i++) {
+        size_t length = i ? size : dsl_header_size(devc);
+        unsigned char *buffer = g_try_malloc0(length);
+        if (!buffer) goto failed;
+        struct libusb_transfer *transfer = libusb_alloc_transfer(0);
+        if (!transfer) { g_free(buffer); goto failed; }
         libusb_fill_bulk_transfer(transfer, usb->devhdl,
-                6 | LIBUSB_ENDPOINT_IN, buf, size,
-                (libusb_transfer_cb_fn)receive_transfer, devc, 0);
-        if ((ret = libusb_submit_transfer(transfer)) != 0) {
-            sr_err("%s: Failed to submit transfer: %s.",
-                   __func__, libusb_error_name(ret));
+            6 | LIBUSB_ENDPOINT_IN, buffer, length,
+            i ? receive_transfer : receive_header, devc, 0);
+        int ret = libusb_submit_transfer(transfer);
+        if (ret != LIBUSB_SUCCESS) {
+            sr_err("Cannot submit USB transfer: %s", libusb_error_name(ret));
             libusb_free_transfer(transfer);
-            g_free(buf);
-            devc->status = DSL_ERROR;
-            devc->abort = TRUE;
-            return SR_ERR;
+            g_free(buffer);
+            result = SR_ERR;
+            goto failed;
         }
         devc->transfers[i] = transfer;
-        devc->submitted_transfers++;
         devc->num_transfers++;
+        devc->submitted_transfers++;
     }
-
     return SR_OK;
+failed:
+    dsl_abort_transfers(sdi);
+    return result;
 }
 
 
@@ -2572,13 +2575,12 @@ SR_PRIV int dsl_destroy_device(struct sr_dev_inst *sdi)
     }
 
     if (sdi->conn) {
-        if (sdi->dev_type == DEV_TYPE_USB)
-            sr_usb_dev_inst_free(sdi->conn);
-        else if (sdi->dev_type == DEV_TYPE_SERIAL)
+        if (sdi->dev_type == DEV_TYPE_SERIAL)
             sr_serial_dev_inst_free(sdi->conn);
     }
 
     sr_dev_inst_free(sdi);
+    return SR_OK;
 }
 
 SR_PRIV int sr_option_value_to_code(int config_id, const char *value, const struct lang_text_map_item *array, int num)

@@ -346,7 +346,8 @@ static GSList *scan(GSList *options)
             }
 
             usb_dev_info = sr_usb_dev_inst_new(bus, address);
-            usb_dev_info->usb_dev = device_handle;
+            if (!usb_dev_info) { dev_destroy(sdi); break; }
+            usb_dev_info->usb_dev = libusb_ref_device(device_handle);
             sdi->conn = usb_dev_info;
             sdi->status = SR_ST_INACTIVE;   
 
@@ -372,16 +373,13 @@ static GSList *scan(GSList *options)
 
             g_free(firmware);
             
-            libusb_unref_device(device_handle);
-#ifdef _WIN32
-            libusb_unref_device(device_handle);
-#endif
+
 
             sr_info("Waitting for device reconnect, name:\"%s\"", prof->model);            
 		}
 	}
 
-	libusb_free_device_list(devlist, 0);
+	libusb_free_device_list(devlist, 1);
 
     if (conn_devices){
         g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
@@ -610,6 +608,9 @@ static int dso_init(const struct sr_dev_inst *sdi)
     return ret;
 }
 
+G_STATIC_ASSERT(sizeof(struct cmd_zero_info) == 30);
+G_STATIC_ASSERT(sizeof(struct cmd_vga_info) == 17);
+
 static gboolean dso_load_eep(struct sr_dev_inst *sdi, struct sr_channel *probe, gboolean fpga_done)
 {
     struct DSL_context *devc;
@@ -617,7 +618,7 @@ static gboolean dso_load_eep(struct sr_dev_inst *sdi, struct sr_channel *probe, 
     uint16_t real_zero_addr;
 
     devc = sdi->priv;
-    struct cmd_zero_info zero_info;
+    struct cmd_zero_info zero_info = {0};
     uint8_t dst_addr = (zero_base_addr +
                         probe->index * (sizeof(struct cmd_zero_info) + sizeof(struct cmd_vga_info)));
     zero_info.zero_addr = dst_addr;
@@ -632,24 +633,28 @@ static gboolean dso_load_eep(struct sr_dev_inst *sdi, struct sr_channel *probe, 
         sr_err("%s: Send Get Zero command failed!", __func__);
     } else {
         if (zero_info.zero_addr == dst_addr) {
-            uint8_t* preoff_ptr = &zero_info.zero_addr + 1;
-             for (i = 0; probe->vga_ptr && (probe->vga_ptr+i)->id; i++) {
+            uint8_t* preoff_ptr = (uint8_t *)&zero_info + 1;
+             for (i = 0; probe->vga_ptr && i < 8 && (probe->vga_ptr+i)->id; i++) {
                  (probe->vga_ptr+i)->preoff = (*(preoff_ptr + 2*i+1) << 8) + *(preoff_ptr + 2*i);
              }
+             if (i != 8) return FALSE;
              if (i != 0) {
-                 probe->comb_diff_top = *(preoff_ptr + 2*i);
-                 probe->comb_diff_bom = *(preoff_ptr + 2*i + 1);
-                 probe->vpos_trans = *(preoff_ptr + 2*i + 2) + (*(preoff_ptr + 2*i + 3) << 8);
-                 probe->comb_comp = *(preoff_ptr + 2*i + 4);
-                 probe->digi_fgain = *(preoff_ptr + 2*i + 5) + (*(preoff_ptr + 2*i + 6) << 8);
-                 probe->cali_fgain0 = dsl_adc_code2fgain(*(preoff_ptr + 2*i + 7));
-                 probe->cali_fgain1 = dsl_adc_code2fgain(*(preoff_ptr + 2*i + 8));
-                 probe->cali_fgain2 = dsl_adc_code2fgain(*(preoff_ptr + 2*i + 9));
-                 probe->cali_fgain3 = dsl_adc_code2fgain(*(preoff_ptr + 2*i + 10));
-                 probe->cali_comb_fgain0 = dsl_adc_code2fgain(*(preoff_ptr + 2*i + 11));
-                 probe->cali_comb_fgain1 = dsl_adc_code2fgain(*(preoff_ptr + 2*i + 12));
-                 probe->cali_comb_fgain2 = dsl_adc_code2fgain(*(preoff_ptr + 2*i + 13));
-                 probe->cali_comb_fgain3 = dsl_adc_code2fgain(*(preoff_ptr + 2*i + 14));
+                 probe->comb_diff_top = zero_info.diff0;
+                 probe->comb_diff_bom = zero_info.diff1;
+                 probe->vpos_trans = zero_info.trans0 | ((uint16_t)zero_info.trans1 << 8);
+                 probe->comb_comp = zero_info.comb_comp;
+                 probe->digi_fgain = zero_info.digi_fgain_lo | ((uint16_t)zero_info.digi_fgain_hi << 8);
+                 probe->cali_fgain0 = dsl_adc_code2fgain(zero_info.fgain0_code);
+                 probe->cali_fgain1 = dsl_adc_code2fgain(zero_info.fgain1_code);
+                 probe->cali_fgain2 = dsl_adc_code2fgain(zero_info.fgain2_code);
+                 probe->cali_fgain3 = dsl_adc_code2fgain(zero_info.fgain3_code);
+                 probe->cali_comb_fgain0 = dsl_adc_code2fgain(zero_info.comb_fgain0_code);
+                 probe->cali_comb_fgain1 = dsl_adc_code2fgain(zero_info.comb_fgain1_code);
+                 /* The historical 30-byte record includes digital gain but
+                  * truncates the last two combined ADC gains. Preserve its
+                  * addresses and stored bytes; absent gains use unity. */
+                 probe->cali_comb_fgain2 = 1.0;
+                 probe->cali_comb_fgain3 = 1.0;
 
                  if (!fpga_done) {
                      const double slope = (probe->comb_diff_bom - probe->comb_diff_top)/(2.0*255.0);
@@ -667,7 +672,7 @@ static gboolean dso_load_eep(struct sr_dev_inst *sdi, struct sr_channel *probe, 
         }
     }
 
-    struct cmd_vga_info vga_info;
+    struct cmd_vga_info vga_info = {0};
     vga_info.vga_addr = dst_addr + sizeof(struct cmd_zero_info);
     if (devc ->profile->dev_caps.feature_caps & CAPS_FEATURE_SEEP)
         real_zero_addr = vga_info.vga_addr;
@@ -680,9 +685,9 @@ static gboolean dso_load_eep(struct sr_dev_inst *sdi, struct sr_channel *probe, 
         sr_err("%s: Send Get Zero command failed!", __func__);
     } else {
         if (vga_info.vga_addr == dst_addr + sizeof(struct cmd_zero_info)) {
-            uint16_t* vgain_ptr = &vga_info.vga0;
-            for (i = 0; probe->vga_ptr && (probe->vga_ptr+i)->id; i++) {
-                (probe->vga_ptr+i)->vgain = *(vgain_ptr + i) << 8;
+            const uint8_t *vgain_ptr = (const uint8_t *)&vga_info + 1;
+            for (i = 0; probe->vga_ptr && i < 8 && (probe->vga_ptr+i)->id; i++) {
+                (probe->vga_ptr+i)->vgain = ((uint32_t)vgain_ptr[2*i] | ((uint32_t)vgain_ptr[2*i+1] << 8)) << 8;
             }
         } else {
             return FALSE;
@@ -1600,41 +1605,51 @@ static int config_set(int id, GVariant *data, struct sr_dev_inst *sdi,
             }
         }
     } else if (id == SR_CONF_ZERO_SET) {
+        for (GSList *entry = sdi->channels; entry; entry = entry->next) {
+            struct sr_channel *channel = entry->data;
+            unsigned gains = 0;
+            while (channel->vga_ptr && gains < 9 && channel->vga_ptr[gains].id) gains++;
+            if (gains != 8) return SR_ERR_ARG;
+            if (channel->cali_comb_fgain2 != 1.0 || channel->cali_comb_fgain3 != 1.0) {
+                sr_err("Legacy calibration record cannot store combined ADC gains 2/3.");
+                return SR_ERR_NA;
+            }
+        }
         GSList *l;
-        struct cmd_zero_info zero_info;
-        struct cmd_vga_info vga_info;
+        struct cmd_zero_info zero_info = {0};
+        struct cmd_vga_info vga_info = {0};
         for(l = sdi->channels; l; l = l->next) {
             struct sr_channel *probe = (struct sr_channel *)l->data;
             zero_info.zero_addr = zero_base_addr +
                                   probe->index * (sizeof(struct cmd_zero_info) + sizeof(struct cmd_vga_info));
             int i;
             uint16_t real_zero_addr;
-            uint8_t *preoff_ptr = &zero_info.zero_addr + 1;
-            for (i = 0; probe->vga_ptr && (probe->vga_ptr+i)->id; i++) {
-                *(preoff_ptr+2*i) = (probe->vga_ptr+i)->preoff & 0x00ff;
-                *(preoff_ptr+2*i+1) = (probe->vga_ptr+i)->preoff >> 8;
+            uint8_t *preoff_ptr = (uint8_t *)&zero_info + 1;
+            for (i = 0; probe->vga_ptr && i < 8 && (probe->vga_ptr+i)->id; i++) {
+                preoff_ptr[2*i] = (probe->vga_ptr+i)->preoff & 0x00ff;
+                preoff_ptr[2*i+1] = (probe->vga_ptr+i)->preoff >> 8;
             }
             if (i != 0) {
-                *(preoff_ptr+2*i) = probe->comb_diff_top;
-                *(preoff_ptr+2*i+1) = probe->comb_diff_bom;
-                *(preoff_ptr+2*i+2) = (probe->vpos_trans&0x00FF);
-                *(preoff_ptr+2*i+3) = (probe->vpos_trans>>8);
-                *(preoff_ptr+2*i+4) = probe->comb_comp;
-                *(preoff_ptr+2*i+5) = (probe->digi_fgain&0x00FF);
-                *(preoff_ptr+2*i+6) = (probe->digi_fgain>>8);
-                *(preoff_ptr+2*i+7) = dsl_adc_fgain2code(probe->cali_fgain0);
-                *(preoff_ptr+2*i+8) = dsl_adc_fgain2code(probe->cali_fgain1);
-                *(preoff_ptr+2*i+9) = dsl_adc_fgain2code(probe->cali_fgain2);
-                *(preoff_ptr+2*i+10) = dsl_adc_fgain2code(probe->cali_fgain3);
-                *(preoff_ptr+2*i+11) = dsl_adc_fgain2code(probe->cali_comb_fgain0);
-                *(preoff_ptr+2*i+12) = dsl_adc_fgain2code(probe->cali_comb_fgain1);
-                *(preoff_ptr+2*i+13) = dsl_adc_fgain2code(probe->cali_comb_fgain2);
-                *(preoff_ptr+2*i+14) = dsl_adc_fgain2code(probe->cali_comb_fgain3);
+                zero_info.diff0 = probe->comb_diff_top;
+                zero_info.diff1 = probe->comb_diff_bom;
+                zero_info.trans0 = (probe->vpos_trans&0x00FF);
+                zero_info.trans1 = (probe->vpos_trans>>8);
+                zero_info.comb_comp = probe->comb_comp;
+                zero_info.digi_fgain_lo = (probe->digi_fgain&0x00FF);
+                zero_info.digi_fgain_hi = (probe->digi_fgain>>8);
+                zero_info.fgain0_code = dsl_adc_fgain2code(probe->cali_fgain0);
+                zero_info.fgain1_code = dsl_adc_fgain2code(probe->cali_fgain1);
+                zero_info.fgain2_code = dsl_adc_fgain2code(probe->cali_fgain2);
+                zero_info.fgain3_code = dsl_adc_fgain2code(probe->cali_fgain3);
+                zero_info.comb_fgain0_code = dsl_adc_fgain2code(probe->cali_comb_fgain0);
+                zero_info.comb_fgain1_code = dsl_adc_fgain2code(probe->cali_comb_fgain1);
+                /* No storage for combined gains 2/3 in the legacy record. */
 
                 vga_info.vga_addr = zero_info.zero_addr + sizeof(struct cmd_zero_info);
-                uint16_t *vgain_ptr = &vga_info.vga0;
-                for (i=0; probe->vga_ptr && (probe->vga_ptr+i)->id; i++){
-                    *(vgain_ptr+i) = (probe->vga_ptr+i)->vgain >> 8;
+                uint8_t *vgain_ptr = (uint8_t *)&vga_info + 1;
+                for (i=0; probe->vga_ptr && i < 8 && (probe->vga_ptr+i)->id; i++){
+                    vgain_ptr[2*i] = (probe->vga_ptr+i)->vgain >> 8;
+                    vgain_ptr[2*i+1] = (probe->vga_ptr+i)->vgain >> 16;
                 }
                 ret = dsl_wr_reg(sdi, CTR0_ADDR, bmEEWP);
                 if (ret == SR_OK) {
@@ -1655,7 +1670,9 @@ static int config_set(int id, GVariant *data, struct sr_dev_inst *sdi,
                         real_zero_addr = (zero_big_addr << 8) + vga_info.vga_addr;
                     ret = dsl_wr_nvm(sdi, (unsigned char *)&vga_info, real_zero_addr, sizeof(struct cmd_vga_info));
                 }
-                ret = dsl_wr_reg(sdi, CTR0_ADDR, bmNONE);
+                int protect_ret = dsl_wr_reg(sdi, CTR0_ADDR, bmNONE);
+                if (ret != SR_OK) return ret;
+                if (protect_ret != SR_OK) return protect_ret;
 
                 if (!(devc->profile->dev_caps.feature_caps & CAPS_FEATURE_HMCAD1511)) {
                     const double slope = (probe->comb_diff_bom - probe->comb_diff_top)/(2.0*255.0);
@@ -1902,9 +1919,10 @@ static void remove_sources(struct DSL_context *devc)
     int i;
     sr_info("%s: remove fds from polling", __func__);
     /* Remove fds from polling. */
+    if (!devc->usbfd) return;
     for (i = 0; devc->usbfd[i] != -1; i++)
         sr_source_remove(devc->usbfd[i]);
-    g_free(devc->usbfd);
+    g_clear_pointer(&devc->usbfd, g_free);
 }
 
 static int receive_data(int fd, int revents, const struct sr_dev_inst *sdi)
@@ -1985,6 +2003,8 @@ static int dev_acquisition_start(struct sr_dev_inst *sdi, void *cb_data)
     //devc->cb_data = cb_data;
     devc->cb_data = sdi;
     devc->num_samples = 0;
+    devc->num_bytes = 0;
+    devc->instant_tail_received = 0;
     devc->empty_transfer_count = 0;
     devc->empty_poll_count = 0;
     devc->status = DSL_INIT;
@@ -2063,6 +2083,10 @@ static int dev_acquisition_start(struct sr_dev_inst *sdi, void *cb_data)
      * settings must be updated before acquisition
      */
     if (sdi->mode != LOGIC) {
+        /* The divider depends on enabled channels, which may have changed
+         * since the frontend last set the sample rate. Commit it at start. */
+        ret = dsl_wr_dso(sdi, dso_cmd_gen(sdi, NULL, SR_CONF_SAMPLERATE));
+        if (ret != SR_OK) return ret;
         devc->trigger_hpos =  devc->trigger_hrate * dsl_en_ch_num(sdi) * devc->limit_samples / 200.0;
         ret = dsl_wr_dso(sdi, dso_cmd_gen(sdi, NULL, SR_CONF_HORIZ_TRIGGERPOS));
         if (ret != SR_OK)
@@ -2087,29 +2111,36 @@ static int dev_acquisition_start(struct sr_dev_inst *sdi, void *cb_data)
         return ret;
     }
 
-    /* setup callback function for data transfer */
+    /* Register each source only after its storage is available. */
     lupfd = libusb_get_pollfds(drvc->sr_ctx->libusb_ctx);
+    if (!lupfd) { dsl_abort_transfers(sdi); return SR_ERR; }
     for (i = 0; lupfd[i]; i++);
-
-    if (!(devc->usbfd = g_try_malloc0(sizeof(struct libusb_pollfd) * (i + 1)))){
-        sr_err("%s,ERROR:failed to alloc memory.", __func__);
-    	return SR_ERR;
+    devc->usbfd = g_try_new(int, i + 1);
+    if (!devc->usbfd) {
+        libusb_free_pollfds(lupfd);
+        dsl_abort_transfers(sdi);
+        return SR_ERR_MALLOC;
     }
-
+    devc->usbfd[0] = -1;
     for (i = 0; lupfd[i]; i++) {
-        sr_source_add(lupfd[i]->fd, lupfd[i]->events,
-                  dsl_get_timeout(sdi), receive_data, sdi);
+        ret = sr_source_add(lupfd[i]->fd, lupfd[i]->events,
+            dsl_get_timeout(sdi), receive_data, sdi);
+        if (ret != SR_OK) {
+            libusb_free_pollfds(lupfd);
+            remove_sources(devc);
+            dsl_abort_transfers(sdi);
+            return ret;
+        }
         devc->usbfd[i] = lupfd[i]->fd;
+        devc->usbfd[i + 1] = -1;
     }
-
-    devc->usbfd[i] = -1;
-    g_free(lupfd);
+    libusb_free_pollfds(lupfd);
 
     wr_cmd.header.dest = DSL_CTL_START;
     wr_cmd.header.size = 0;
     if ((ret = command_ctl_wr(usb->devhdl, wr_cmd)) != SR_OK) {
-        devc->status = DSL_ERROR;
-        devc->abort = TRUE;
+        remove_sources(devc);
+        dsl_abort_transfers(sdi);
         return ret;
     }
     devc->status = DSL_START;
