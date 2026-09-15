@@ -50,6 +50,7 @@ class LogicSignal;
 namespace data {
 
 class LogicSnapshot;
+class DsoSnapshot;
 
 namespace decode {
 class Annotation;
@@ -199,7 +200,8 @@ signals:
   
 private: 
 	std::list<decode::Decoder*> _stack;
-	pv::data::LogicSnapshot *_snapshot;
+    pv::data::LogicSnapshot *_snapshot;
+    pv::data::DsoSnapshot *_dso_snapshot;
   
     std::map<const decode::Row, decode::RowData*>   _rows;
     std::map<const decode::Row, bool>       _rows_gshow;

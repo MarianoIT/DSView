@@ -66,8 +66,8 @@ public:
     void export_run();
  
 private:
-    void reject();
-    void accept();
+	void reject() override;
+    void accept() override;
 	void show_error();
     void closeEvent(QCloseEvent* event) override;
     void keyPressEvent(QKeyEvent *event) override;

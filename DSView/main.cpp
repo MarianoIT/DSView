@@ -142,7 +142,7 @@ int main(int argc, char *argv[])
 	}
 
 	//----------------------HightDpiScaling
-#if QT_VERSION >= QT_VERSION_CHECK(5,6,0)
+#if QT_VERSION >= QT_VERSION_CHECK(5,6,0) && QT_VERSION < QT_VERSION_CHECK(6,0,0)
 bool bHighScale = true;
 
 #ifdef _WIN32

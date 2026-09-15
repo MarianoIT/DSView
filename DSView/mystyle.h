@@ -28,7 +28,9 @@ class MyStyle : public QProxyStyle
 {
     Q_OBJECT
     public:
-    int pixelMetric(PixelMetric metric, const QStyleOption * option = 0, const QWidget * widget = 0 ) {
+    using QProxyStyle::pixelMetric;
+
+    int pixelMetric(PixelMetric metric, const QStyleOption * option = 0, const QWidget * widget = 0 ) const override {
         int s = QProxyStyle::pixelMetric(metric, option, widget);
         if (metric == QStyle::PM_SmallIconSize) {
             s = 24;

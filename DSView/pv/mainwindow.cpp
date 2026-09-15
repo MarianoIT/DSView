@@ -1397,10 +1397,10 @@ namespace pv
 
         if (language == LAN_CN)
         {
-            _qtTrans.load(":/qt_" + QString::number(language));
-            qApp->installTranslator(&_qtTrans);
-            _myTrans.load(":/my_" + QString::number(language));
-            qApp->installTranslator(&_myTrans);
+            if (_qtTrans.load(":/qt_" + QString::number(language)))
+                qApp->installTranslator(&_qtTrans);
+            if (_myTrans.load(":/my_" + QString::number(language)))
+                qApp->installTranslator(&_myTrans);
         }
         else if (language == LAN_EN)
         {
@@ -1426,9 +1426,10 @@ namespace pv
 
         QString qssRes = ":/" + style + ".qss";
         QFile qss(qssRes);
-        qss.open(QFile::ReadOnly | QFile::Text);
-        qApp->setStyleSheet(qss.readAll());
-        qss.close();
+        if (qss.open(QFile::ReadOnly | QFile::Text)) {
+            qApp->setStyleSheet(qss.readAll());
+            qss.close();
+        }
 
         UiManager::Instance()->Update(UI_UPDATE_ACTION_THEME);
         UiManager::Instance()->Update(UI_UPDATE_ACTION_FONT);

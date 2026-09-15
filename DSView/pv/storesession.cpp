@@ -549,13 +549,14 @@ void StoreSession::save_proc(data::Snapshot *snapshot)
     _is_busy = false;   
 }
 
+#define sprintf(buffer, ...) snprintf(buffer, sizeof(buffer), __VA_ARGS__)
+
 bool StoreSession::meta_gen(data::Snapshot *snapshot, std::string &str)
 {
     GSList *l;
     struct sr_channel *probe;
     int probecnt;
     char *s;
-    struct sr_status status;
     char meta[300] = {0};
   
     sprintf(meta, "%s", "[version]\n"); str += meta;
@@ -801,6 +802,8 @@ bool StoreSession::meta_gen(data::Snapshot *snapshot, std::string &str)
     return true;
 }
 
+#undef sprintf
+
 //export as csv file
 bool StoreSession::export_start()
 {
@@ -926,7 +929,10 @@ void StoreSession::export_exec(data::Snapshot *snapshot)
     strcpy(output.time_string, dateTimeString.toStdString().c_str());
     
     QFile file(_file_name);
-    file.open(QIODevice::WriteOnly | QIODevice::Text);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        dsv_err("Failed to open export file.");
+        return;
+    }
     QTextStream out(&file); 
     encoding::set_utf8(out);
     //out.setGenerateByteOrderMark(true);  // UTF-8 without BOM
@@ -1191,8 +1197,6 @@ void StoreSession::export_exec(data::Snapshot *snapshot)
         unsigned int usize = 8192;        
         struct sr_datafeed_analog ap;
         
-        unsigned char* read_buf = (unsigned char*)data_buffer;
-
         const uint64_t ring_start = analog_snapshot->get_ring_start();
  
         int ch_count = snapshot->get_channel_num();  

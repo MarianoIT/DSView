@@ -94,8 +94,8 @@ public:
     ~DeviceOptions();
 
 protected:
-	void accept();
-    void reject();
+	void accept() override;
+    void reject() override;
 
 private:
     QLayout *get_property_form(QWidget *parent);
@@ -115,7 +115,7 @@ private:
 
 private:
     //IChannelCheck
-    void ChannelChecked(int index, QObject *object);
+    void ChannelChecked(int index, QObject *object) override;
 
 private slots:
 	void enable_all_probes();

@@ -885,40 +885,11 @@ namespace pv
         }
 
         std::vector<view::Signal *> sigs;
-        unsigned int logic_probe_count = 0;
-        unsigned int dso_probe_count = 0;
-        unsigned int analog_probe_count = 0;
 
         _capture_data->clear();
         _view_data->clear();
         set_cur_snap_samplerate(_device_agent.get_sample_rate());
         set_cur_samplelimits(_device_agent.get_sample_limit());    
-
-        // Detect what data types we will receive
-        if (_device_agent.have_instance())
-        {
-            for (const GSList *l = _device_agent.get_channels(); l; l = l->next)
-            {
-                const sr_channel *const probe = (const sr_channel *)l->data;
-
-                switch (probe->type)
-                {
-                case SR_CHANNEL_LOGIC:
-                    if (probe->enabled)
-                        logic_probe_count++;
-                    break;
-
-                case SR_CHANNEL_DSO:
-                    dso_probe_count++;
-                    break;
-
-                case SR_CHANNEL_ANALOG:
-                    if (probe->enabled)
-                        analog_probe_count++;
-                    break;
-                }
-            }
-        }
 
         int mode = _device_agent.get_work_mode();
 
@@ -989,8 +960,6 @@ namespace pv
 
         std::vector<view::Signal *> sigs;
         view::Signal *signal = NULL;
-        int logic_chan_num = 0;
-        int dso_chan_num = 0; 
         int start_view_dex = -1;
 
         set_cur_snap_samplerate(_device_agent.get_sample_rate());
@@ -1018,8 +987,6 @@ namespace pv
             case SR_CHANNEL_LOGIC:
                 if (probe->enabled)
                 {    
-                    logic_chan_num++;
-
                     auto i = _signals.begin();
 
                     while (i != _signals.end())
@@ -1048,8 +1015,6 @@ namespace pv
             case SR_CHANNEL_ANALOG:
                 if (probe->enabled)
                 { 
-                    dso_chan_num++;
-
                     auto i = _signals.begin();
                     while (i != _signals.end())
                     {
@@ -1486,6 +1451,12 @@ namespace pv
                     _callback->trigger_message(DSV_MSG_REV_END_PACKET);
                 }
                 else{
+                    if (mode == DSO) {
+                        for (auto decoder : _decode_traces) {
+                            decoder->frame_ended();
+                            add_decode_task(decoder);
+                        }
+                    }
                     if (mode == DSO && _is_instant){             
                         sr_status status;
 

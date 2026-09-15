@@ -135,8 +135,8 @@ QString Ruler::format_freq(double period, unsigned int precision)
         char buffer[50] = {0};
         char format[15] = {0};
         QString units = FreqPrefixes[prefix] + "Hz";
-        sprintf(format, "%%.%df", (int)precision);       
-        sprintf(buffer, format, 1 / (period * multiplier));
+        snprintf(format, sizeof(format), "%%.%df", (int)precision);
+        snprintf(buffer, sizeof(buffer), format, 1 / (period * multiplier));
         strcat(buffer, units.toUtf8().data());
         return QString(buffer);
     }
@@ -161,8 +161,8 @@ QString Ruler::format_time(double t, int prefix,
     QString units = SIPrefixes[prefix] + "s";
     double v = (t * multiplier) / 1000000.0;
     buffer[0] = v >= 0 ? '+' : '-';
-    sprintf(format, "%%.%df", (int)precision);   
-    sprintf(buffer + 1, format, v);
+    snprintf(format, sizeof(format), "%%.%df", (int)precision);
+    snprintf(buffer + 1, sizeof(buffer) - 1, format, v);
     strcat(buffer + 1, units.toUtf8().data());
     return QString(buffer);
 }
@@ -178,7 +178,7 @@ QString Ruler::format_real_time(uint64_t delta_index, uint64_t sample_rate)
     double delta_time_double = v1 * delta_index;
     uint64_t delta_time = v1 * delta_index;
 
-    if (delta_time_double > UINT64_MAX){
+    if (delta_time_double > static_cast<double>(UINT64_MAX)){
         return "INF";
     }
 
@@ -539,17 +539,6 @@ void Ruler::draw_logic_tick_mark(QPainter &p)
         cursor->paint_label(p, rect(), prefix, bWorkStoped);
     }
 
-    if (cursor_list.size()) {
-        auto i = cursor_list.begin();
-        int index = 1;
-
-        while (i != cursor_list.end()) {
-            (*i)->paint_label(p, rect(), prefix, bWorkStoped);
-            index++;
-            i++;
-        }
-    }
-
     if (_view.trig_cursor_shown()) {
         _view.get_trig_cursor()->paint_fix_label(p, rect(), prefix, 'T', _view.get_trig_cursor()->get_color(), false);
     }
@@ -725,8 +714,6 @@ void Ruler::draw_cursor_sel(QPainter &p)
 
     if (!cursor_list.empty()) {
         int index = 1;
-        auto i = cursor_list.begin();
-
         for (auto curosr : cursor_list) {
             const QRectF cursorRect = get_cursor_sel_rect(index);
             p.setPen(QPen(Qt::black, 1, Qt::DotLine));

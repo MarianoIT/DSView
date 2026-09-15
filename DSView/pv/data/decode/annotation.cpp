@@ -162,7 +162,7 @@ const std::vector<QString>& Annotation::annotations() const
 					assert(text_format_buf);
 				 }
 				 
-				 sprintf(text_format_buf, src_str, num_str);
+				 snprintf(text_format_buf, text_format_buf_len, src_str, num_str);
 				 resItem.cvt_lines.push_back(QString(text_format_buf));
 			 }
 

@@ -26,6 +26,8 @@
 #include <assert.h>
 
 #include "decoderstack.h"
+#include "dsosnapshot.h"
+#include "../view/dsosignal.h"
 #include "logicsnapshot.h"
 #include "decode/decoder.h"
 #include "decode/annotation.h"
@@ -67,6 +69,7 @@ DecoderStack::DecoderStack(pv::SigSession *session,
     _stask_stauts = NULL; 
     _is_capture_end = true;
     _snapshot = NULL;
+    _dso_snapshot = NULL;
     _progress = 0;
     _is_decoding = false;
     _result_count = 0;
@@ -436,6 +439,7 @@ void DecoderStack::do_decode_work()
     init();
 
     _snapshot = NULL;
+    _dso_snapshot = NULL;
 
 	// Check that all decoders have the required channels
     if (!check_required_probes()) {
@@ -445,25 +449,28 @@ void DecoderStack::do_decode_work()
         return;
 	}
 
-	// We get the logic data of the first channel in the list.
-	// This works because we are currently assuming all
-	// LogicSignals have the same data/snapshot
+    const int signal_type = _session->get_device()->get_work_mode() == DSO ?
+        SR_CHANNEL_DSO : SR_CHANNEL_LOGIC;
+
     for (auto dec : _stack) {
         if (dec->have_probes()) {
             for(auto s :  _session->get_signals()) {
-                if(s->get_index() == dec->first_probe_index() && s->signal_type() == SR_CHANNEL_LOGIC)
+                if (s->get_index() == dec->first_probe_index() && s->signal_type() == signal_type)
                 { 
-                    _snapshot = ((pv::view::LogicSignal*)s)->data();
-                    if (_snapshot != NULL)
+                    if (signal_type == SR_CHANNEL_DSO)
+                        _dso_snapshot = ((pv::view::DsoSignal*)s)->data();
+                    else
+                        _snapshot = ((pv::view::LogicSignal*)s)->data();
+                    if (_snapshot != NULL || _dso_snapshot != NULL)
                         break;
                 }
             }
-            if (_snapshot != NULL)
+            if (_snapshot != NULL || _dso_snapshot != NULL)
                 break;
         }
     }
 
-	if (_snapshot == NULL)
+    if (_snapshot == NULL && _dso_snapshot == NULL)
     {   
         _error_message = L_S(STR_PAGE_MSG, S_ID(IDS_MSG_DECODERSTACK_DECODE_WORK_ERROR),
                              "One or more required channels have not been specified");
@@ -471,14 +478,17 @@ void DecoderStack::do_decode_work()
         return;
     }		
 
-    if (_session->is_realtime_refresh() == false && _snapshot->empty())
+    if (_session->is_realtime_refresh() == false &&
+        ((signal_type == SR_CHANNEL_DSO && _dso_snapshot->empty()) ||
+         (signal_type == SR_CHANNEL_LOGIC && _snapshot->empty())))
     { 
         dsv_err("ERROR:Decode data is empty.");
         return;
     }
 
     // Get the samplerate
-	_samplerate = _snapshot->samplerate();
+    _samplerate = signal_type == SR_CHANNEL_DSO ?
+        _dso_snapshot->samplerate() : _snapshot->samplerate();
     if (_samplerate == 0.0)
     {
         dsv_err("ERROR:Decode data got an invalid sample rate.");
@@ -540,6 +550,25 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
     _is_decoding = true;
 
     void* lbp_array[35];
+    std::vector<uint8_t> dso_thresholds(logic_di->dec_num_channels);
+
+    if (_dso_snapshot) {
+        const uint64_t sample_count = _dso_snapshot->get_sample_count();
+        for (int j = 0; j < logic_di->dec_num_channels; j++) {
+            const int sig_index = logic_di->dec_channelmap[j];
+            if (sig_index == -1)
+                continue;
+
+            const uint8_t *samples = _dso_snapshot->get_samples(0, sample_count - 1, sig_index);
+            uint8_t minimum = samples[0];
+            uint8_t maximum = samples[0];
+            for (uint64_t sample_index = 1; sample_index < sample_count; sample_index++) {
+                minimum = std::min(minimum, samples[sample_index]);
+                maximum = std::max(maximum, samples[sample_index]);
+            }
+            dso_thresholds[j] = minimum + (maximum - minimum) / 2;
+        }
+    }
 
     for (int j =0 ; j < logic_di->dec_num_channels; j++){
         lbp_array[j] = NULL;
@@ -555,7 +584,8 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
             if (!bCheckEnd){
                 bCheckEnd = true;
 
-                uint64_t align_sample_count = _snapshot->get_ring_sample_count();
+                uint64_t align_sample_count = _dso_snapshot ?
+                    _dso_snapshot->get_sample_count() : _snapshot->get_ring_sample_count();
 
                 if (align_sample_count == 0){
                     dsv_info("Have no data to decode.");
@@ -574,14 +604,16 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
                 }
             }
         }
-        else if (i >= _snapshot->get_ring_sample_count())
+        else if (i >= (_dso_snapshot ? _dso_snapshot->get_sample_count() :
+                          _snapshot->get_ring_sample_count()))
         {   
             // Wait the data is ready.
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             continue;
         }
  
-        uint64_t chunk_end = end_index;
+        uint64_t chunk_end = std::min(end_index + 1, i + MaxChunkSize);
+        std::vector<std::vector<uint8_t>> dso_chunks(logic_di->dec_num_channels);
 
         for (int j =0 ; j < logic_di->dec_num_channels; j++) {
             int sig_index = logic_di->dec_channelmap[j];
@@ -592,8 +624,21 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
                 chunk_const.push_back(0);
             }
             else {
-                if (_snapshot->has_data(sig_index)) {
-                    const uint8_t *data_ptr = _snapshot->get_samples(i, chunk_end, sig_index, &lbp);
+                if (_dso_snapshot && _dso_snapshot->has_data(sig_index)) {
+                    const uint8_t *samples = _dso_snapshot->get_samples(i, chunk_end - 1, sig_index);
+                    std::vector<uint8_t> &digital = dso_chunks[j];
+                    digital.assign((chunk_end - i + 7) / 8, 0);
+                    for (uint64_t sample_index = 0; sample_index < chunk_end - i; sample_index++) {
+                        if (samples[sample_index] >= dso_thresholds[j])
+                            digital[sample_index / 8] |= 1 << (sample_index % 8);
+                    }
+                    chunk.push_back(digital.data());
+                    chunk_const.push_back(0);
+                }
+                else if (_snapshot && _snapshot->has_data(sig_index)) {
+                    uint64_t logic_chunk_end = chunk_end - 1;
+                    const uint8_t *data_ptr = _snapshot->get_samples(i, logic_chunk_end, sig_index, &lbp);
+                    chunk_end = logic_chunk_end + 1;
                     bool flag = _snapshot->get_sample(i, sig_index);
                     chunk.push_back(data_ptr);
                     chunk_const.push_back(flag);
@@ -620,11 +665,6 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
             dsv_info("Decoding data to end.");
             break;
         }
-
-        if (chunk_end >= end_index)
-            chunk_end = end_index + 1;
-        if (chunk_end - i > MaxChunkSize)
-            chunk_end = i + MaxChunkSize;
 
         bEndTime = (chunk_end > end_index);
 
@@ -697,7 +737,7 @@ void DecoderStack::execute_decode_stack()
     uint64_t decode_start = 0;
     uint64_t decode_end = 0;
 
-	assert(_snapshot);
+    assert(_snapshot || _dso_snapshot);
 
 	// Create the session
     // one decoderstatck onwer one session
@@ -710,7 +750,8 @@ void DecoderStack::execute_decode_stack()
     }
     
     // Get the intial sample count
-    _sample_count = _snapshot->get_ring_sample_count();
+    _sample_count = _dso_snapshot ? _dso_snapshot->get_sample_count() :
+        _snapshot->get_ring_sample_count();
  
     // Create the decoders
     for(auto dec : _stack)

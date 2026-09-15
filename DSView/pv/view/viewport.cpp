@@ -339,7 +339,6 @@ void Viewport::paintSignals(QPainter &p, QColor fore, QColor back)
     if (_view.xcursors_shown() && _type == TIME_VIEW) {
         auto &xcursor_list = _view.get_xcursorList();
         auto i = xcursor_list.begin();
-        int index = 0;
         bool hovered = false;
 
         while (i != xcursor_list.end()) {
@@ -376,7 +375,6 @@ void Viewport::paintSignals(QPainter &p, QColor fore, QColor back)
             }
 
             i++;
-            index++;
         }
     }
 
@@ -656,7 +654,6 @@ void Viewport::mousePressEvent(QMouseEvent *event)
         else if (_view.session().get_device()->get_work_mode() == DSO) {
             if (_hover_hit) {
                 const int64_t index = _view.pixel2index(event->pos().x());
-                auto &cursor_list = _view.get_cursorList();
                 _view.add_cursor(index);
                 _view.show_cursors(true);
             }
@@ -1084,6 +1081,8 @@ void Viewport::onLogicMouseRelease(QMouseEvent *event)
             set_action(NO_ACTION);
             break;
         }
+        default:
+            break;
     } 
 }
 
@@ -1176,11 +1175,14 @@ void Viewport::onDsoMouseRelease(QMouseEvent *event)
             }
             break;
         }
+        default:
+            break;
     }
 }
 
 void Viewport::onAnalogMouseRelease(QMouseEvent *event)
 {
+    (void)event;
 
 }
 
@@ -1289,7 +1291,6 @@ void Viewport::mouseDoubleClickEvent(QMouseEvent *event)
                 index = _view.pixel2index(curX);
             }
 
-            auto &cursor_list = _view.get_cursorList();
             _view.add_cursor(index);
             _view.show_cursors(true);
         }
@@ -1319,7 +1320,6 @@ void Viewport::mouseDoubleClickEvent(QMouseEvent *event)
             uint64_t index;
             const double curX = event->pos().x();
             index = _view.pixel2index(curX);
-            auto &cursor_list = _view.get_cursorList();
             _view.add_cursor(index);
             _view.show_cursors(true);
         }
@@ -1558,6 +1558,7 @@ void Viewport::set_receive_len(quint64 length)
 
 void Viewport::update(int event)
 {
+    (void)event;
     QWidget::update();
 }
 
@@ -1861,12 +1862,6 @@ void Viewport::paintMeasure(QPainter &p, QColor fore, QColor back)
             *line++ = QLine(x[0], _dso_xm_y,
                            x[1], _dso_xm_y);
             _mm_width = _view.get_ruler()->format_real_time(_dso_xm_index[1] - _dso_xm_index[0], sample_rate);
-
-            // -- width show
-            const QString w_ctr = "W="+_mm_width;
-            int w_rect_width = p.boundingRect(0, 0, INT_MAX, INT_MAX,
-                                              Qt::AlignLeft | Qt::AlignVCenter, w_ctr).width();
-            p.drawText(QRect(x[0]+10, _dso_xm_y - text_height, w_rect_width, text_height), w_ctr);
             measure_line_count += 2;
         }
         if (dso_xm_stage > 2) {
@@ -1880,25 +1875,43 @@ void Viewport::paintMeasure(QPainter &p, QColor fore, QColor back)
             _mm_freq = _view.get_ruler()->format_real_freq(_dso_xm_index[2] - _dso_xm_index[0], sample_rate);
             _mm_duty = QString::number((_dso_xm_index[1] - _dso_xm_index[0]) * 100.0 / (_dso_xm_index[2] - _dso_xm_index[0]), 'f', 2)+"%";
 
-            // -- period show
-            const QString p_ctr = "P="+_mm_period;
-            int p_rect_width = p.boundingRect(0, 0, INT_MAX, INT_MAX,
-                                              Qt::AlignLeft | Qt::AlignVCenter, p_ctr).width();
-            p.drawText(QRect(x[0]+10, _dso_xm_y + 30 - text_height, p_rect_width, text_height), p_ctr);
-
-            // -- frequency show
-            const QString f_ctr = "F="+_mm_freq;
-            int f_rect_width = p.boundingRect(0, 0, INT_MAX, INT_MAX,
-                                              Qt::AlignLeft | Qt::AlignVCenter, f_ctr).width();
-            p.drawText(QRect(x[0]+20 + p_rect_width, _dso_xm_y + 30 - text_height, f_rect_width, text_height), f_ctr);
-
-            // -- duty show
-            const QString d_ctr = "D="+_mm_duty;
-            int d_rect_width = p.boundingRect(0, 0, INT_MAX, INT_MAX,
-                                              Qt::AlignLeft | Qt::AlignVCenter, d_ctr).width();
-            p.drawText(QRect(x[1]+10, _dso_xm_y - 0.5*text_height, d_rect_width, text_height), d_ctr);
-
             measure_line_count += 3;
+        }
+
+        if (dso_xm_stage > 1) {
+            QStringList labels;
+            labels.append("W=" + _mm_width);
+            if (dso_xm_stage > 2) {
+                labels.append("P=" + _mm_period);
+                labels.append("F=" + _mm_freq);
+                labels.append("D=" + _mm_duty);
+            }
+
+            int panel_width = 0;
+            for (const QString &label : labels)
+                panel_width = std::max(panel_width, p.fontMetrics().horizontalAdvance(label));
+
+            const int margin = 6;
+            const int panel_height = labels.size() * text_height + margin * 2;
+            panel_width += margin * 2;
+            const int preferred_x = x[dso_xm_stage - 1] + margin;
+            const int panel_x = std::max(0, std::min(preferred_x, width() - panel_width));
+            int panel_y = _dso_xm_y - panel_height - margin;
+            if (panel_y < 0)
+                panel_y = std::min(height() - panel_height, _dso_xm_y + margin);
+
+            const QRect panel_rect(panel_x, std::max(0, panel_y), panel_width, panel_height);
+            p.setPen(Qt::NoPen);
+            p.setBrush(View::LightBlue);
+            p.drawRect(panel_rect);
+            p.setPen(active_color);
+            p.setBrush(Qt::NoBrush);
+            for (int label_index = 0; label_index < labels.size(); label_index++) {
+                const QRect label_rect(panel_rect.left() + margin,
+                                       panel_rect.top() + margin + label_index * text_height,
+                                       panel_rect.width() - margin * 2, text_height);
+                p.drawText(label_rect, Qt::AlignLeft | Qt::AlignVCenter, labels[label_index]);
+            }
         }
         p.drawLines(measure_lines, measure_line_count);
         if (dso_xm_stage < DsoMeasureStages) {

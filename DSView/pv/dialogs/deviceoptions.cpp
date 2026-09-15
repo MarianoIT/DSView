@@ -686,7 +686,7 @@ void DeviceOptions::analog_probes(QGridLayout &layout)
         probe_widget->setLayout(probe_layout); 
 
         bool ch_enabled = probe->enabled;
-        if (ch_dex < _lst_probe_enabled_status.size()){
+        if (ch_dex >= 0 && static_cast<size_t>(ch_dex) < _lst_probe_enabled_status.size()){
             ch_enabled = _lst_probe_enabled_status[ch_dex];
         }
 

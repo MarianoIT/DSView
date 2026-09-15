@@ -52,16 +52,16 @@ private:
 
 private:
     void retranslateUi();
-	void paintEvent(QPaintEvent *event);
+    void paintEvent(QPaintEvent *event) override;
 
 private:
-	void mousePressEvent(QMouseEvent * event);
-	void mouseReleaseEvent(QMouseEvent *event);
-	void mouseMoveEvent(QMouseEvent *event);
-    void mouseDoubleClickEvent(QMouseEvent *event);
-	void leaveEvent(QEvent *event);
-    void wheelEvent(QWheelEvent *event);
-    void contextMenuEvent(QContextMenuEvent *event);
+    void mousePressEvent(QMouseEvent * event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
     void changeName(QMouseEvent *event);
     void changeColor(QMouseEvent *event);

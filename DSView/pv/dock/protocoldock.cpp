@@ -357,8 +357,9 @@ void ProtocolDock::on_add_protocol()
 
 bool ProtocolDock::add_protocol_by_id(QString id, bool silent, std::list<pv::data::decode::Decoder*> &sub_decoders)
 {
-    if (_session->get_device()->get_work_mode() != LOGIC) {
-        dsv_info("Protocol Analyzer\nProtocol Analyzer is only valid in Digital Mode!");
+    const int mode = _session->get_device()->get_work_mode();
+    if (mode != LOGIC && mode != DSO) {
+        dsv_info("Protocol Analyzer\nProtocol Analyzer is only valid in Digital or Oscilloscope Mode!");
         return false;
     }
 

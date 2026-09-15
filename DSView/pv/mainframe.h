@@ -45,7 +45,7 @@ typedef long *MESSAGE_RESULT_PTR;
 #endif
 
 namespace pv {
- 
+
 class MainWindow;
 class WinNativeWidget;
 
@@ -53,7 +53,7 @@ namespace dialogs {
 class DSMessageBox;
 class DSDialog;
 }
- 
+
 struct Point
 {
     int x;
@@ -74,7 +74,7 @@ struct FormInitInfo
     int k;
 };
 
-class MainFrame : 
+class MainFrame :
     public QFrame,
     public ITitleParent,
     public IParentNativeEventCallback
@@ -98,22 +98,22 @@ public:
 
 public:
     MainFrame();
- 
+
     void ShowFormInit();
     void ShowHelpDocAsync();
-  
+
     bool IsMaxsized();
     bool IsNormalsized();
     bool IsMoving();
     void SetFormRegion(int x, int y, int w, int h);
-    QRect GetFormRegion();    
+    QRect GetFormRegion();
     void saveNormalRegion();
     QWidget* GetMainWindow();
     QWidget* GetBodyView();
 
-protected: 
-    void resizeEvent(QResizeEvent *event);
-    void closeEvent(QCloseEvent *event);
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
     bool eventFilter(QObject *object, QEvent *event) override;
 
 #ifdef _WIN32
@@ -121,21 +121,21 @@ protected:
     bool nativeEvent(const QByteArray &eventType, void *message, MESSAGE_RESULT_PTR result) override;
 #endif
 
-    void changeEvent(QEvent *event) override; 
+    void changeEvent(QEvent *event) override;
 
 signals:
     void sig_ParentNativeEvent(int msg);
 
 public slots:
-    void unfreezing();   
+    void unfreezing();
     void show_doc();
     void setTaskbarProgress(int progress);
 
     void showNormal();
     void showMaximized();
-    void showMinimized(); 
+    void showMinimized();
     void OnParentNaitveWindowEvent(int msg);
-  
+
 private:
     void hide_border();
     void show_border();
@@ -152,8 +152,8 @@ private:
 
     //IParentNativeEventCallback
     void OnParentNativeEvent(ParentNativeEvent msg) override;
- 
- 
+
+
 private:
     toolbars::TitleBar *_titleBar;
     MainWindow *_mainWindow;
@@ -167,11 +167,11 @@ private:
     widgets::Border *_top_right;
     widgets::Border *_bottom_left;
     widgets::Border *_bottom_right;
- 
-    bool    _bDraging;  
+
+    bool    _bDraging;
     int     _hit_border;
     QTimer  _timer;
-    bool    _freezing; 
+    bool    _freezing;
     // Taskbar Progress Effert for Win7 and Above
 #ifdef _WIN32
     QWinTaskbarButton *_taskBtn;
@@ -180,9 +180,9 @@ private:
 
     bool    _is_win32_parent_window;
     bool    _is_resize_ready;
-    WinNativeWidget *_parentNativeWidget; 
+    WinNativeWidget *_parentNativeWidget;
     FormInitInfo    _initWndInfo;
-    FormRegion      _normalRegion; 
+    FormRegion      _normalRegion;
     QPoint          _clickPos;
     QRect           _dragStartRegion;
     QScreen         *_move_start_screen;

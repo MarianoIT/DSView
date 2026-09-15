@@ -10,6 +10,87 @@ The sigrok project aims at creating a portable, cross-platform, Free/Libre/Open-
 
 The DSView software is in a usable state and has official tarball releases. However, it is still a work in progress. Some basic functionality is available and working, but other things are always on the TODO list.
 
+# Building
+
+DSView requires CMake 3.21 or newer, a C99/C++11 compiler, Qt 6, GLib, libusb,
+zlib, Boost, FFTW, Python development headers, and pkg-config. Build from a
+clean source checkout; do not reuse a build directory across platforms or CPU
+architectures.
+
+## Linux
+
+On Debian or Ubuntu, install the build dependencies:
+
+```sh
+sudo apt update
+sudo apt install build-essential cmake ninja-build pkg-config qt6-base-dev \
+	libglib2.0-dev libusb-1.0-0-dev zlib1g-dev libboost-dev libfftw3-dev \
+	python3-dev
+```
+
+Configure and build:
+
+```sh
+cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-linux
+sudo cmake --install build-linux
+```
+
+## macOS Apple Silicon
+
+Install Xcode Command Line Tools and native Apple Silicon Homebrew, then install
+the dependencies:
+
+```sh
+xcode-select --install
+brew update
+brew install cmake ninja glib libusb zlib boost fftw python@3.12 qt pkgconf
+```
+
+Configure a native `arm64` build:
+
+```sh
+cmake -S . -B build-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+	-DCMAKE_OSX_ARCHITECTURES=arm64 \
+	-DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix)"
+cmake --build build-arm64
+cmake --install build-arm64
+```
+
+The executable is written to `build.dir/DSView`. Verify it is native before
+packaging:
+
+```sh
+file build.dir/DSView
+otool -L build.dir/DSView
+```
+
+## Windows
+
+Use the MSYS2 MinGW64 environment. Install MSYS2, open **MSYS2 MinGW x64**, and
+install the matching compiler, Qt 6, and libraries:
+
+```sh
+pacman -Syu
+pacman -S --needed mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
+	mingw-w64-x86_64-ninja mingw-w64-x86_64-pkgconf \
+	mingw-w64-x86_64-qt6-base mingw-w64-x86_64-glib2 \
+	mingw-w64-x86_64-libusb mingw-w64-x86_64-zlib \
+	mingw-w64-x86_64-boost mingw-w64-x86_64-fftw \
+	mingw-w64-x86_64-python
+```
+
+Configure and build from the MinGW64 shell:
+
+```sh
+cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-windows
+cmake --install build-windows
+```
+
+Run the generated executable from the MinGW64 environment, or deploy the Qt and
+MinGW runtime DLLs with the application before distributing it.
+
 # Useful links
 
 - [dreamsourcelab.com](https://www.dreamsourcelab.com)

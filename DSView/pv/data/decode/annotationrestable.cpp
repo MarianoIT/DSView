@@ -201,7 +201,7 @@ const char* AnnotationResTable::format_to_string(const char *hex_str, int fmt)
 	 if (fmt == DecoderDataFormat::dec && len * 4 <= 64){
          long long lv = bin2long_string(buf, len * 4);
 		 g_number_tmp_64[0] = 0;
-    	 sprintf(g_number_tmp_64, "%lld", lv);
+		 snprintf(g_number_tmp_64, sizeof(g_number_tmp_64), "%lld", lv);
          return g_number_tmp_64;
 	 }
 	 
@@ -211,7 +211,7 @@ const char* AnnotationResTable::format_to_string(const char *hex_str, int fmt)
              int lv = (int)bin2long_string(buf, len * 4);
 			 //can display chars
 			 if (lv >= 33 && lv <= 126){
-				 sprintf(g_number_tmp_64, "%c", (char)lv);
+				 snprintf(g_number_tmp_64, sizeof(g_number_tmp_64), "%c", (char)lv);
 				 return g_number_tmp_64;
 			 }
          }

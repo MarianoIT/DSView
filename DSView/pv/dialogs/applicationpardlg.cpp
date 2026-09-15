@@ -62,8 +62,7 @@ void ApplicationParamDlg::bind_font_name_list(QComboBox *box, QString v)
 
     if (_font_name_list.size() == 0)
     {
-        QFontDatabase fDataBase;
-        _font_name_list = fDataBase.families();
+        _font_name_list = QFontDatabase::families();
     }
    
     for (QString family : _font_name_list) {

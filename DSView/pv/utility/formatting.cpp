@@ -38,10 +38,10 @@ QString Formatting::DateTimeToString(QDateTime tm, TimeStrigFormatType format)
     switch (format)
     {
     case TimeStrigFormatType::TIME_STR_FORMAT_SHORT2: //"yyMMdd-hhmmss"
-        sprintf(buffer, "%02d%02d%02d-%02d%02d%02d", year%100, month, day, hour, minute, second);
+        snprintf(buffer, sizeof(buffer), "%02d%02d%02d-%02d%02d%02d", year%100, month, day, hour, minute, second);
         break;
     default: //yyyy-MM-dd hh:mm:ss
-        sprintf(buffer, "%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);   
+        snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
         break;
     }
 

@@ -251,7 +251,7 @@ void TrigBar::reload()
 
     } else if (mode == DSO) {
         _trig_action->setVisible(true);
-        _protocol_action->setVisible(false);
+        _protocol_action->setVisible(true);
         _measure_action->setVisible(true);
         _search_action->setVisible(false);
         _function_action->setVisible(true);

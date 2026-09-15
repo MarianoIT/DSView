@@ -69,7 +69,7 @@ signals:
     void sig_closed();
     
 private: 
-    void reject();
+    void reject() override;
     void keyPressEvent(QKeyEvent *event) override;
     void retranslateUi();
 

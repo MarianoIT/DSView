@@ -1032,7 +1032,7 @@ void TriggerDock::on_serial_value_changed(const QString &v)
             }
 
             char tmp[10];
-            sprintf(tmp, "%02lX", val);
+            snprintf(tmp, sizeof(tmp), "%02lX", val);
             _serial_hex_lineEdit->setText(QString(tmp));
         }       
     }

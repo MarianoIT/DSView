@@ -266,11 +266,8 @@ void DecoderOptionsDlg::load_decoder_forms(QWidget *container)
 	using pv::data::decode::Decoder; 
 	assert(container); 
 
-    int dex = 0;
- 
     for(auto dec : _trace->decoder()->stack()) 
     { 
-        ++dex;
         QWidget *panel = new QWidget(container);
         QFormLayout *form = new QFormLayout();
         form->setContentsMargins(0,0,0,0);
@@ -298,13 +295,16 @@ DsComboBox* DecoderOptionsDlg::create_probe_selector(
     selector->addItem("-", QVariant::fromValue(-1));
   
     int dex = 0;
+    const int mode = AppControl::Instance()->GetSession()->get_device()->get_work_mode();
     const int binded_index = decoder->binded_probe_index(pdch);
 
 	for(auto s : sigs) 
     {
         dex++;
 
-        if (s->signal_type() == SR_CHANNEL_LOGIC && s->enabled()){
+        const bool compatible_signal = mode == DSO ?
+            s->signal_type() == SR_CHANNEL_DSO : s->signal_type() == SR_CHANNEL_LOGIC;
+        if (compatible_signal && s->enabled()){
 			selector->addItem(s->get_name(),QVariant::fromValue(s->get_index()));
             
             if (binded_index == s->get_index()){

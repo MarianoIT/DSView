@@ -140,7 +140,7 @@ public:
 private: 
 	void setup_ui();
     void retranslateUi(); 
-    bool eventFilter(QObject *object, QEvent *event);
+    bool eventFilter(QObject *object, QEvent *event) override;
     void check_usb_device_speed();
     void reset_all_view();
     bool confirm_to_store_data();

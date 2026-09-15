@@ -28,6 +28,7 @@
 
 /* Python module search paths */
 SRD_PRIV GSList *searchpaths = NULL;
+static wchar_t *python_home = NULL;
 
 /* session.c */
 extern SRD_PRIV GSList *sessions;
@@ -205,7 +206,7 @@ SRD_API int srd_init(const char *path)
 	PyImport_AppendInittab("sigrokdecode", PyInit_sigrokdecode);
 
 	/* Initialize the Python interpreter. */
-    Py_InitializeEx(0); 
+    Py_InitializeEx(0);
 
 #ifdef DECODERS_DIR
 	/* Hardcoded decoders install location, if defined. */
@@ -254,8 +255,10 @@ SRD_API int srd_init(const char *path)
 		}
 	}
 
-	/* Initialize the Python GIL (this also happens to acquire it). */
+	/* Python 3.9+ initializes the GIL during interpreter startup. */
+#if PY_VERSION_HEX < 0x03090000
 	PyEval_InitThreads();
+#endif
 
 	/* Release the GIL (ignore return value, we don't need it here). */
 	PyEval_SaveThread();
@@ -395,7 +398,17 @@ SRD_API GSList *srd_searchpaths_get(void)
 //set python home directory
 SRD_API void srd_set_python_home(const wchar_t *path)
 {
-	Py_SetPythonHome((wchar_t*)path);
+	g_free(python_home);
+	python_home = NULL;
+	if (path) {
+		const size_t length = wcslen(path) + 1;
+		python_home = g_malloc(length * sizeof(*python_home));
+		if (python_home)
+			memcpy(python_home, path, length * sizeof(*python_home));
+	}
+#if PY_VERSION_HEX < 0x03080000
+	Py_SetPythonHome(python_home);
+#endif
 }
 
 /** @} */

@@ -64,13 +64,13 @@ public:
     ~DevMode();
 
 private:
-	void paintEvent(QPaintEvent *event);
+    void paintEvent(QPaintEvent *event) override;
 
 private:
-	void mousePressEvent(QMouseEvent * event);
-	void mouseReleaseEvent(QMouseEvent *event);
-	void mouseMoveEvent(QMouseEvent *event);
-	void leaveEvent(QEvent *event); 
+    void mousePressEvent(QMouseEvent * event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
     const dev_mode_name* get_mode_name(int mode);
 
      //IUiWindow

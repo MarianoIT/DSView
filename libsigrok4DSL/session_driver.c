@@ -1579,9 +1579,9 @@ static int sr_load_virtual_device_session(struct sr_dev_inst *sdi)
     unz_file_info64 fileInfo;
 
     struct sr_channel *probe;
-    int devcnt, i, j;
+    int i, j;
     uint16_t probenum;
-    uint64_t tmp_u64, total_probes, enabled_probes;
+    uint64_t tmp_u64, total_probes;
     uint16_t p;
     int64_t tmp_64;
     char **sections, **keys, *metafile, *val;
@@ -1652,7 +1652,6 @@ static int sr_load_virtual_device_session(struct sr_dev_inst *sdi)
         return SR_ERR;
     }
 
-    devcnt = 0;
     sections = g_key_file_get_groups(kf, NULL);
 
     for (i = 0; sections[i]; i++)
@@ -1674,7 +1673,7 @@ static int sr_load_virtual_device_session(struct sr_dev_inst *sdi)
         if (!strncmp(sections[i], "header", 6))
         {
             /* device section */
-            enabled_probes = total_probes = 0;
+            total_probes = 0;
             keys = g_key_file_get_keys(kf, sections[i], NULL, NULL);
 
             for (j = 0; keys[j]; j++)
@@ -1782,7 +1781,6 @@ static int sr_load_virtual_device_session(struct sr_dev_inst *sdi)
                 }
                 else if (!strncmp(keys[j], "probe", 5))
                 {
-                    enabled_probes++;
                     tmp_u64 = strtoul(keys[j] + 5, NULL, 10);
                     /* sr_session_save() */
                     if (version == 1)
@@ -2065,7 +2063,6 @@ static int sr_load_virtual_device_session(struct sr_dev_inst *sdi)
             }
             g_strfreev(keys);
         }
-        devcnt++;
     }
     g_strfreev(sections);
     g_key_file_free(kf);

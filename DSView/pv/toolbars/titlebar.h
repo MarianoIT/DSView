@@ -36,7 +36,7 @@ namespace pv {
 
 class ITitleParent
 {
-public: 
+public:
     virtual void MoveWindow(int x, int y)=0;
     virtual QPoint GetParentPos()=0;
     virtual bool ParentIsMaxsized()=0;
@@ -53,8 +53,8 @@ class TitleBar : public QWidget, public IUiWindow
 public:
     TitleBar(bool top, QWidget *parent, ITitleParent *titleParent, bool hasClose);
     ~TitleBar();
-    
-    void setTitle(QString title); 
+
+    void setTitle(QString title);
     QString title();
 
     //IUiWindow
@@ -72,7 +72,7 @@ public:
 
     void EnableAbleDrag(bool bEnabled);
 
-private: 
+private:
     void reStyle();
 
     bool ParentIsMaxsized();
@@ -87,18 +87,18 @@ public slots:
     inline bool IsMoving(){return _moving;}
 
 protected:
-    void paintEvent(QPaintEvent *event);
-    void mousePressEvent(QMouseEvent *event);
-    void mouseMoveEvent(QMouseEvent *event);
-    void mouseReleaseEvent(QMouseEvent *event);
-    void mouseDoubleClickEvent(QMouseEvent *event);
- 
-    
+    void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void mouseDoubleClickEvent(QMouseEvent *event) override;
+
+
     QToolButton *_minimizeButton;
     QToolButton *_maximizeButton;
     QToolButton *_closeButton;
     QLabel      *_title;
-  
+
     bool        _moving;
     bool        _is_draging;
     bool        _isTop;

@@ -30,7 +30,7 @@
 #include "../ui/xtoolbutton.h"
 #include "../ui/uimanager.h"
 
-class DockOptions;
+struct DockOptions;
 
 namespace pv {
 

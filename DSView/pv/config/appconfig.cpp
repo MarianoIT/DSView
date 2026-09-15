@@ -531,7 +531,7 @@ QString GetDecodeScriptDir()
     // ./decoders
     if (dir1.exists(path))
     {
-         return path;     QColor GetStyleColor();
+            return path;
     }
 
     QDir dir(QCoreApplication::applicationDirPath());

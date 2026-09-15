@@ -138,7 +138,7 @@ static int loadfile(struct sr_input *in, const char *filename)
 	struct context *ctx;
 	float fdata[CHUNK_SIZE];
 	uint64_t sample;
-	int num_samples, chunk_samples, s, c, fd, l;
+	int chunk_samples, s, c, fd, l;
 	char buf[CHUNK_SIZE];
 
 	ctx = in->sdi->priv;
@@ -160,8 +160,6 @@ static int loadfile(struct sr_input *in, const char *filename)
 
 	lseek(fd, 40, SEEK_SET);
 	l = read(fd, buf, 4);
-	num_samples = GUINT32_FROM_LE((uint32_t)*(buf));
-	num_samples /= ctx->samplesize / ctx->num_channels;
 	while (TRUE) {
 		if ((l = read(fd, buf, CHUNK_SIZE)) < 1)
 			break;

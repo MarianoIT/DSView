@@ -62,8 +62,8 @@ private slots:
     void reset();
 
 protected:
-	void accept();
-    void reject();
+	void accept() override;
+    void reject() override;
 
 private:
     SigSession *_session;

@@ -67,8 +67,8 @@ private:
     void UpdateFont() override;
 
 protected:
-	void accept();
-    void reject();
+	void accept() override;
+    void reject() override;
 
 private:
     SigSession *_session;
