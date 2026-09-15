@@ -139,6 +139,12 @@ bool set_config_byte(int key, uint8_t value)
         g_variant_new_byte(value)) == SR_OK;
 }
 
+bool set_channel_config_byte(const sr_channel *channel, int key, uint8_t value)
+{
+    return ds_set_actived_device_config(channel, nullptr, key,
+        g_variant_new_byte(value)) == SR_OK;
+}
+
 bool set_config_bool(int key, bool value)
 {
     return ds_set_actived_device_config(nullptr, nullptr, key,
@@ -238,8 +244,23 @@ int capture_run(int argc, char *argv[])
         failed_setting = "channel";
     else if (mode == DSO && !set_config_bool(SR_CONF_INSTANT, true))
         failed_setting = "instant";
-    else if (mode == DSO && !set_config_byte(SR_CONF_TRIGGER_SOURCE, DSO_TRIGGER_AUTO))
-        failed_setting = "trigger";
+    else if (mode == DSO) {
+        ds_device_full_info trigger_info{};
+        const sr_channel *trigger_channel = nullptr;
+        if (ds_get_actived_device_info(&trigger_info) == SR_OK && trigger_info.di) {
+            for (const GSList *item = trigger_info.di->channels; item; item = item->next) {
+                const auto *candidate = static_cast<const sr_channel *>(item->data);
+                if (candidate->index == channel && candidate->type == SR_CHANNEL_DSO) {
+                    trigger_channel = candidate;
+                    break;
+                }
+            }
+        }
+        const uint8_t trigger_level = 94;
+        if (!set_config_byte(SR_CONF_TRIGGER_SOURCE, DSO_TRIGGER_CH0) ||
+            !set_channel_config_byte(trigger_channel, SR_CONF_TRIGGER_VALUE, trigger_level))
+            failed_setting = "trigger";
+    }
     if (!failed_setting.empty()) {
         ds_release_actived_device();
         print_error("device_config_failed", "Unable to apply capture " + failed_setting + " configuration");
