@@ -31,6 +31,7 @@ struct CaptureSummary {
     std::atomic<uint64_t> packets{0};
     std::vector<uint8_t> channel0_samples;
     std::vector<uint8_t> dso_channel0_samples;
+    uint64_t channel_index = 0;
 };
 
 CaptureSummary *capture_summary = nullptr;
@@ -53,8 +54,20 @@ void data_callback(const sr_dev_inst *, const sr_datafeed_packet *packet)
         const auto *dso = static_cast<const sr_datafeed_dso *>(packet->payload);
         capture_summary->dso_samples += dso->num_samples;
         const auto *data = static_cast<const uint8_t *>(dso->data);
+        const uint64_t channel_count = g_slist_length(dso->probes);
+        uint64_t channel_offset = 0;
+        uint64_t probe_index = 0;
+        for (const GSList *probe = dso->probes; probe; probe = probe->next, probe_index++) {
+            const auto *channel = static_cast<const sr_channel *>(probe->data);
+            if (channel->index == capture_summary->channel_index) {
+                channel_offset = probe_index;
+                break;
+            }
+        }
+        if (channel_count == 0)
+            return;
         for (int index = 0; index < dso->num_samples; index++) {
-            const uint8_t value = data[index];
+            const uint8_t value = data[index * channel_count + channel_offset];
             capture_summary->dso_channel0_samples.push_back(value);
             uint8_t current_min = capture_summary->dso_min;
             while (value < current_min &&
@@ -236,6 +249,8 @@ int capture_run(int argc, char *argv[])
     }
 
     std::string failed_setting;
+    uint8_t configured_trigger_level = 0;
+    const double configured_trigger_voltage = 1.0;
     if (!set_config_int16(SR_CONF_DEVICE_MODE, mode))
         failed_setting = "mode";
     else if (!set_config_uint64(SR_CONF_SAMPLERATE, samplerate))
@@ -258,9 +273,32 @@ int capture_run(int argc, char *argv[])
                 }
             }
         }
-        const uint8_t trigger_level = 94;
+        uint32_t trigger_ref_min = 1;
+        uint32_t trigger_ref_max = 255;
+        GVariant *trigger_value = nullptr;
+        if (ds_get_actived_device_config(nullptr, nullptr, SR_CONF_REF_MIN,
+                &trigger_value) == SR_OK) {
+            trigger_ref_min = g_variant_get_uint32(trigger_value);
+            g_variant_unref(trigger_value);
+        }
+        if (ds_get_actived_device_config(nullptr, nullptr, SR_CONF_REF_MAX,
+                &trigger_value) == SR_OK) {
+            trigger_ref_max = g_variant_get_uint32(trigger_value);
+            g_variant_unref(trigger_value);
+        }
+        const double signal_max_voltage = 3.02;
+        const uint32_t signal_adc_min = 0;
+        const uint32_t signal_adc_max = 187;
+        const uint32_t requested_trigger_level = static_cast<uint32_t>(
+            signal_adc_min + configured_trigger_voltage / signal_max_voltage *
+            (signal_adc_max - signal_adc_min) + 0.5);
+        configured_trigger_level = static_cast<uint8_t>(
+            requested_trigger_level < trigger_ref_min ? trigger_ref_min :
+            requested_trigger_level > trigger_ref_max ? trigger_ref_max :
+            requested_trigger_level);
         if (!set_config_byte(SR_CONF_TRIGGER_SOURCE, DSO_TRIGGER_CH0) ||
-            !set_channel_config_byte(trigger_channel, SR_CONF_TRIGGER_VALUE, trigger_level))
+            !set_channel_config_byte(trigger_channel, SR_CONF_TRIGGER_VALUE,
+                configured_trigger_level))
             failed_setting = "trigger";
     }
     if (!failed_setting.empty()) {
@@ -270,6 +308,7 @@ int capture_run(int argc, char *argv[])
     }
 
     CaptureSummary summary;
+    summary.channel_index = channel;
     capture_summary = &summary;
     if (ds_start_collect() != SR_OK) {
         capture_summary = nullptr;
@@ -404,6 +443,8 @@ int capture_run(int argc, char *argv[])
               << ",\"logic_bytes\":" << summary.logic_bytes
               << ",\"channel0_samples\":" << summary.channel0_samples.size()
               << ",\"packets\":" << summary.packets
+              << ",\"trigger_voltage_v\":" << configured_trigger_voltage
+              << ",\"trigger_level_adc\":" << static_cast<unsigned>(configured_trigger_level)
               << ",\"completion_event\":" << summary.completion_event << "}}" << std::endl;
     return 0;
 }
