@@ -336,7 +336,7 @@ class Modbus_ADU_SC(Modbus_ADU):
                 self.parse_report_server_id()
             elif function == 22:
                 self.parse_mask_write_register()
-            elif function in {21, 21, 24, 43}:
+            elif function in {20, 21, 24, 43}:
                 self.parse_not_implemented()
             elif function > 0x80:
                 self.parse_error()
@@ -615,7 +615,7 @@ class Modbus_ADU_CS(Modbus_ADU):
                 self.parse_mask_write_register()
             elif function == 23:
                 self.parse_read_write_registers()
-            elif function in {21, 21, 24, 43}:
+            elif function in {20, 21, 24, 43}:
                 self.parse_not_implemented()
             else:
                 self.puti(1, 'error',
@@ -911,9 +911,16 @@ class Decoder(srd.Decoder):
         # space between each message. But if within a message there is a length
         # of more than 1.5 character, that's an error. For our purposes
         # somewhere between seems fine.
-        # A character is 11 bits long, so (3.5 + 1.5)/2 * 11 ~= 28
-        # TODO: Display error for too short or too long.
-        if (ss - ADU.last_read) <= self.bitlength * self.options['framegap']:
+        # A character is 11 bits long; a gap above 1.5 characters within a
+        # frame is invalid, while the configured larger gap starts a new ADU.
+        gap = ss - ADU.last_read
+        frame_gap = self.bitlength * self.options['framegap']
+        inter_character_gap = self.bitlength * 16.5
+        if gap <= frame_gap:
+            if ADU.data and gap > inter_character_gap:
+                self.puta(ADU.last_read, ss, ADU.annotation_prefix + 'error',
+                          'Inter-character gap exceeds 1.5 characters')
+                ADU.hasError = True
             ADU.add_data(ss, es, data)
         else:
             # It's been too long since the last part of the ADU!
