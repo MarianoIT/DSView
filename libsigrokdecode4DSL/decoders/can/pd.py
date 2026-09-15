@@ -165,7 +165,17 @@ class Decoder(srd.Decoder):
         return True
 
     def is_valid_crc(self, crc_bits):
-        return True # TODO
+        if len(crc_bits) != 15:
+            return False
+
+        # ISO 11898-1 CRC-15/CAN, polynomial x^15+x^14+x^10+x^8+x^7+x^4+x^3+1.
+        crc = 0
+        for bit in self.bits[:self.last_databit + 1]:
+            bit = bit ^ ((crc >> 14) & 1)
+            crc = (crc << 1) & 0x7fff
+            if bit:
+                crc ^= 0x4599
+        return crc == bitpack_msb(crc_bits)
 
     def decode_error_frame(self, bits):
         pass # TODO
@@ -188,7 +198,7 @@ class Decoder(srd.Decoder):
             crc_type = "CRC-15"
 
             x = self.last_databit + 1
-            crc_bits = self.bits[x:x + self.crc_len + 1]
+            crc_bits = self.bits[x:x + self.crc_len]
             self.crc = bitpack_msb(crc_bits)
             self.putb([11, ['%s sequence: 0x%04x' % (crc_type, self.crc),
                             '%s: 0x%04x' % (crc_type, self.crc), '0x%04x' % self.crc]])
