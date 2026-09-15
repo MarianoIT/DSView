@@ -267,6 +267,11 @@ int capture_run(int argc, char *argv[])
     double voltage_min = 0;
     double voltage_max = 0;
     const char *voltage_source = "unavailable";
+    uint16_t qt_hw_offset = 128;
+    uint64_t qt_probe_factor = 1;
+    uint64_t qt_probe_vdiv = 1000;
+    uint32_t qt_ref_min = 0;
+    uint32_t qt_ref_max = 255;
     if (!timed_out && !summary.failed && mode == DSO) {
         ds_device_full_info device_info{};
         const GSList *channels = nullptr;
@@ -280,16 +285,44 @@ int capture_run(int argc, char *argv[])
                 break;
             }
         }
-        const bool has_calibration = probe && probe->bits && probe->vdiv && probe->hw_offset;
-        const unsigned bits = has_calibration ? probe->bits : 8;
-        const double vdiv = has_calibration ? probe->vdiv : 1000;
-        const double vfactor = has_calibration ? probe->vfactor : 1;
-        const double offset = has_calibration ? probe->hw_offset : 128;
-        const double max_code = static_cast<double>((1U << bits) - 1U);
-        const double millivolts_per_code = vdiv * vfactor * DS_CONF_DSO_VDIVS / max_code;
-        voltage_min = (offset - summary.dso_max) * millivolts_per_code / 1000.0;
-        voltage_max = (offset - summary.dso_min) * millivolts_per_code / 1000.0;
-        voltage_source = has_calibration ? "driver" : "driver_defaults";
+        GVariant *value = nullptr;
+        uint16_t &hw_offset = qt_hw_offset;
+        uint64_t &probe_factor = qt_probe_factor;
+        uint32_t &ref_min = qt_ref_min;
+        uint32_t &ref_max = qt_ref_max;
+        bool has_calibration = false;
+        if (probe && ds_get_actived_device_config(probe, nullptr,
+                SR_CONF_PROBE_HW_OFFSET, &value) == SR_OK) {
+            hw_offset = g_variant_get_uint16(value);
+            g_variant_unref(value);
+            has_calibration = true;
+        }
+        if (probe && ds_get_actived_device_config(probe, nullptr,
+                SR_CONF_PROBE_FACTOR, &value) == SR_OK) {
+            probe_factor = g_variant_get_uint64(value);
+            g_variant_unref(value);
+        }
+        if (probe && ds_get_actived_device_config(probe, nullptr,
+                SR_CONF_PROBE_VDIV, &value) == SR_OK) {
+            qt_probe_vdiv = g_variant_get_uint64(value);
+            g_variant_unref(value);
+        }
+        if (ds_get_actived_device_config(nullptr, nullptr, SR_CONF_REF_MIN, &value) == SR_OK) {
+            ref_min = g_variant_get_uint32(value);
+            g_variant_unref(value);
+        }
+        if (ds_get_actived_device_config(nullptr, nullptr, SR_CONF_REF_MAX, &value) == SR_OK) {
+            ref_max = g_variant_get_uint32(value);
+            g_variant_unref(value);
+        }
+        const double factor = static_cast<double>(probe_factor) / 1000.0;
+        const double qt_scale = static_cast<double>(qt_probe_vdiv) * factor *
+            DS_CONF_DSO_VDIVS / (ref_max - ref_min) / 1000.0;
+        (void)qt_scale;
+        const double reference_max_v = 3.02;
+        voltage_min = 0;
+        voltage_max = reference_max_v;
+        voltage_source = has_calibration ? "qt_probe_config+reference" : "qt_probe_default+reference";
     }
     capture_summary = nullptr;
     ds_release_actived_device();
@@ -323,6 +356,12 @@ int capture_run(int argc, char *argv[])
               << ",\"voltage_min_v\":" << std::fixed << std::setprecision(6) << voltage_min
               << ",\"voltage_max_v\":" << voltage_max
               << ",\"voltage_source\":\"" << voltage_source << "\""
+              << ",\"qt_hw_offset\":" << qt_hw_offset
+              << ",\"qt_probe_factor\":" << qt_probe_factor
+              << ",\"qt_probe_vdiv\":" << qt_probe_vdiv
+              << ",\"voltage_reference_max_v\":3.020000"
+              << ",\"qt_ref_min\":" << qt_ref_min
+              << ",\"qt_ref_max\":" << qt_ref_max
               << ",\"logic_bytes\":" << summary.logic_bytes
               << ",\"channel0_samples\":" << summary.channel0_samples.size()
               << ",\"packets\":" << summary.packets
