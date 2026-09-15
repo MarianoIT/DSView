@@ -245,7 +245,6 @@ class Decoder(srd.Decoder):
                         'REC < ' + str(timing['REC']['min'][self.overdrive])]])
                 # A reset pulse or slot can start on a falling edge.
                 self.state = 'LOW'
-                # TODO: Check minimum recovery time.
             elif self.state == 'LOW': # Reset pulse or slot.
                 # Wait for rising edge.
                 self.wait({0: 'r'})
