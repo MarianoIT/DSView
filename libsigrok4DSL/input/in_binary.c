@@ -87,7 +87,6 @@ static int init(struct sr_input *in, const char *filename)
 
 	for (i = 0; i < num_probes; i++) {
 		snprintf(name, SR_MAX_PROBENAME_LEN, "%d", i);
-		/* TODO: Check return value. */
 		if (!(probe = sr_channel_new(i, SR_CHANNEL_LOGIC, TRUE, name)))
 			return SR_ERR;
 		in->sdi->channels = g_slist_append(in->sdi->channels, probe);
@@ -123,7 +122,13 @@ static int loadfile(struct sr_input *in, const char *filename)
 		src = sr_config_new(SR_CONF_SAMPLERATE,
 				g_variant_new_uint64(ctx->samplerate));
 		meta.config = g_slist_append(NULL, src);
-		ds_data_forward(in->sdi, &packet);
+		if (ds_data_forward(in->sdi, &packet) != SR_OK) {
+				sr_config_free(src);
+			close(fd);
+			g_free(ctx);
+			in->internal = NULL;
+			return SR_ERR;
+		}
 		sr_config_free(src);
 	}
 
@@ -134,13 +139,22 @@ static int loadfile(struct sr_input *in, const char *filename)
 	logic.data = buffer;
 	while ((size = read(fd, buffer, CHUNKSIZE)) > 0) {
 		logic.length = size;
-		ds_data_forward(in->sdi, &packet);
+		if (ds_data_forward(in->sdi, &packet) != SR_OK) {
+			close(fd);
+			g_free(ctx);
+			in->internal = NULL;
+			return SR_ERR;
+		}
 	}
 	close(fd);
 
 	/* Send end packet to the session bus. */
 	packet.type = SR_DF_END;
-	ds_data_forward(in->sdi, &packet);
+	if (ds_data_forward(in->sdi, &packet) != SR_OK) {
+		g_free(ctx);
+		in->internal = NULL;
+		return SR_ERR;
+	}
 
 	g_free(ctx);
 	in->internal = NULL;
