@@ -20,6 +20,7 @@
 from common.srdhelper import bitpack_lsb
 from .lists import ADDRESSES
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 class SamplerateError(Exception):
     pass
@@ -103,7 +104,7 @@ class Decoder(srd.Decoder):
         ss = self.samplenum
         pins = self.wait(conds)
         es = self.samplenum
-        return pins, ss, es, self.matched
+        return pins, ss, es, match_mask(self.matched)
 
     def read_pulse(self, high, time):
         e = 'f' if high else 'r'

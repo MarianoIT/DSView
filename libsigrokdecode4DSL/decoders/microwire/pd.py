@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from collections import namedtuple
 
 '''
@@ -98,11 +99,11 @@ class Decoder(srd.Decoder):
             packet = []
             while cs:
                 # Save change.
-                packet.append(Packet(self.samplenum, self.matched, cs, sk, si, so))
+                packet.append(Packet(self.samplenum, match_mask(self.matched), cs, sk, si, so))
                 edge = 'r' if sk == 0 else 'f'
                 (cs, sk, si, so) = self.wait([{0: 'l'}, {1: edge}, {3: 'e'}])
             # Save last change.
-            packet.append(Packet(self.samplenum, self.matched, cs, sk, si, so))
+            packet.append(Packet(self.samplenum, match_mask(self.matched), cs, sk, si, so))
 
             # Figure out if this is a status check.
             # Either there is no clock or no start bit (on first rising edge).

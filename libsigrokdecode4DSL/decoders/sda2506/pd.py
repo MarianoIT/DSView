@@ -20,6 +20,7 @@
 
 import re
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 ann_cmdbit, ann_databit, ann_cmd, ann_data, ann_warning = range(5)
 
@@ -92,7 +93,7 @@ class Decoder(srd.Decoder):
             # Wait for CLK edge or CE edge.
             (clk, d, ce) = self.wait([{0: 'e'}, {2: 'e'}])
 
-            if (self.matched & (0b1 << 0)) and ce == 1 and clk == 1:
+            if (match_mask(self.matched) & (0b1 << 0)) and ce == 1 and clk == 1:
                 # Rising clk edge and command mode.
                 bitstart = self.samplenum
                 self.wait({0: 'f'})
@@ -100,11 +101,11 @@ class Decoder(srd.Decoder):
                 if len(self.cmdbits) > 24:
                     self.cmdbits = self.cmdbits[0:24]
                 self.putbit(bitstart, self.samplenum, ann_cmdbit, d)
-            elif (self.matched & (0b1 << 0)) and ce == 0 and clk == 0:
+            elif (match_mask(self.matched) & (0b1 << 0)) and ce == 0 and clk == 0:
                 # Falling clk edge and data mode.
                 bitstart = self.samplenum
                 (clk, d, ce) = self.wait([{'skip': int(2.5 * (1e6 / self.samplerate))}, {0: 'r'}, {2: 'e'}]) # Wait 25 us for data ready.
-                if (self.matched & (0b1 << 2)) and not (self.matched & 0b011):
+                if (match_mask(self.matched) & (0b1 << 2)) and not (match_mask(self.matched) & 0b011):
                     self.wait([{0: 'r'}, {2: 'e'}])
                 if len(self.databits) == 0:
                     self.datastart = bitstart
@@ -113,7 +114,7 @@ class Decoder(srd.Decoder):
                 if len(self.databits) == 8:
                     self.putdata(self.datastart, self.samplenum)
                     self.databits = []
-            elif (self.matched & (0b1 << 1)) and ce == 0:
+            elif (match_mask(self.matched) & (0b1 << 1)) and ce == 0:
                 # Chip enable edge.
                 try:
                     self.decode_field('addr', 1, 7)

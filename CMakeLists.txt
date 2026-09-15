@@ -650,10 +650,12 @@ add_executable(${PROJECT_NAME}
 	${DSView_HEADERS_MOC}
 	${DSView_FORMS_HEADERS}
 	${DSView_RESOURCES_RCC}
-	${libsigrokdecode4DSL_SOURCES}
 )
 
-target_link_libraries(${PROJECT_NAME} dsview_protocol)
+add_library(dsview_decode STATIC ${libsigrokdecode4DSL_SOURCES})
+target_link_libraries(dsview_decode PUBLIC dsview_protocol)
+target_compile_definitions(dsview_decode PRIVATE CONF_HOST="${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_SYSTEM_NAME}")
+target_link_libraries(${PROJECT_NAME} dsview_decode)
 
 add_executable(dsview-cli cli/dsview-cli.cpp)
 target_compile_definitions(dsview-cli PRIVATE
@@ -670,6 +672,18 @@ target_link_libraries(dsview-hardware-test dsview_protocol)
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(dsview-decode-test cli/decode_test.cpp)
+    target_link_libraries(dsview-decode-test PRIVATE dsview_decode)
+    target_compile_definitions(dsview-decode-test PRIVATE
+        DSVIEW_DECODER_DIR="${DSVIEW_OUTPUT_DIR}/decoders"
+        DSVIEW_DECODER_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/cli/decoder_fixtures"
+        DSVIEW_CLI_RESOURCE_DIR="${DSVIEW_OUTPUT_DIR}/res")
+    add_test(NAME dsview-decode-protocols COMMAND dsview-decode-test)
+    set_tests_properties(dsview-decode-protocols PROPERTIES TIMEOUT 60)
+    if(DSVIEW_HARDWARE_TESTS)
+        add_test(NAME dsview-decode-hardware COMMAND dsview-decode-test --hardware)
+        set_tests_properties(dsview-decode-hardware PROPERTIES TIMEOUT 60 RESOURCE_LOCK dsl_usb LABELS "hardware")
+    endif()
     add_executable(dsview-log-test cli/test_log.c common/log/xlog.c)
     target_link_libraries(dsview-log-test PRIVATE ${CMAKE_THREAD_LIBS_INIT})
     add_test(NAME dsview-log-bounds COMMAND dsview-log-test)
@@ -713,6 +727,9 @@ add_custom_target(dsview_resources
 add_dependencies(${PROJECT_NAME} dsview_resources)
 add_dependencies(dsview-cli dsview_resources)
 add_dependencies(dsview-hardware-test dsview_resources)
+if(TARGET dsview-decode-test)
+    add_dependencies(dsview-decode-test dsview_resources)
+endif()
 
 #===============================================================================
 #= Installation

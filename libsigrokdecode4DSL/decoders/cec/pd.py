@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from .protocoldata import *
 
 # Pulse types
@@ -307,6 +308,6 @@ class Decoder(srd.Decoder):
             # If there was a timeout while waiting for ACK: RESYNC.
             # Note: This is an expected situation as no new falling edge will
             # happen until next frame is transmitted.
-            if self.matched == 0b10:
+            if match_mask(self.matched) == 0b10:
                 self.wait({0: 'f'})
                 self.fall_end = self.samplenum

@@ -2,8 +2,8 @@
  * This file is part of the libsigrokdecode project.
  *
  * Copyright (C) 2010 Uwe Hermann <uwe@hermann-uwe.de>
- * Copyright (C) 2012 Bert Vermeulen <bert@biot.com>
  * Copyright (C) 2016 DreamSourceLab <support@dreamsourcelab.com>
+ * Copyright (C) 2012 Bert Vermeulen <bert@biot.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,9 +25,8 @@
 #include <glib.h>
 #include <inttypes.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <stdint.h>
-#include <assert.h>
-#include "log.h"
 
 /** @cond PRIVATE */
 
@@ -62,7 +61,8 @@ static void oldpins_array_seed(struct srd_decoder_inst *di)
 	count = di->dec_num_channels;
 	arr = g_array_sized_new(FALSE, TRUE, sizeof(uint8_t), count);
 	g_array_set_size(arr, count);
-	memset(arr->data, SRD_INITIAL_PIN_SAME_AS_SAMPLE0, count);
+	if (arr->data)
+		memset(arr->data, SRD_INITIAL_PIN_SAME_AS_SAMPLE0, count);
 	di->old_pins_array = arr;
 }
 
@@ -143,6 +143,7 @@ SRD_API int srd_inst_option_set(struct srd_decoder_inst *di,
 	Py_DECREF(py_di_options);
 	py_di_options = PyDict_New();
 	PyObject_SetAttrString(di->py_inst, "options", py_di_options);
+	Py_DECREF(py_di_options);
 
 	for (l = di->decoder->options; l; l = l->next) {
 		sdo = l->data;
@@ -184,10 +185,13 @@ SRD_API int srd_inst_option_set(struct srd_decoder_inst *di,
 				goto err_out;
 			}
 		}
-		if (PyDict_SetItemString(py_di_options, sdo->id, py_optval) == -1)
+		if (PyDict_SetItemString(py_di_options, sdo->id, py_optval) == -1) {
+			Py_XDECREF(py_optval);
 			goto err_out;
+		}
 		/* Not harmful even if we used the default. */
 		g_hash_table_remove(options, sdo->id);
+		Py_XDECREF(py_optval);
 	}
 	if (g_hash_table_size(options) != 0)
 		srd_warn("Unknown options specified for '%s'", di->inst_id);
@@ -195,9 +199,8 @@ SRD_API int srd_inst_option_set(struct srd_decoder_inst *di,
 	ret = SRD_OK;
 
 err_out:
-	Py_XDECREF(py_optval);
 	if (PyErr_Occurred()) {
-        srd_exception_catch(NULL, "Stray exception in srd_inst_option_set()");
+		srd_exception_catch("Stray exception in srd_inst_option_set()");
 		ret = SRD_ERR_PYTHON;
 	}
 	PyGILState_Release(gstate);
@@ -231,7 +234,8 @@ SRD_API int srd_inst_channel_set_all(struct srd_decoder_inst *di,
 		GHashTable *new_channels)
 {
 	GVariant *channel_val;
-	GList *l;
+	GHashTableIter iter;
+	gpointer key, value;
 	GSList *sl;
 	struct srd_channel *pdch;
 	int *new_channelmap, new_channelnum, num_required_channels, i;
@@ -251,11 +255,7 @@ SRD_API int srd_inst_channel_set_all(struct srd_decoder_inst *di,
 		return SRD_ERR_ARG;
 	}
 
-	new_channelmap = g_try_malloc0(sizeof(int) * di->dec_num_channels);
-	if (new_channelmap == NULL){
-		srd_err("%s,ERROR:failed to alloc memory.", __func__);
-		return SRD_ERR;
-	}		
+	new_channelmap = g_malloc0(sizeof(int) * di->dec_num_channels);
 
 	/*
 	 * For now, map all indexes to channel -1 (can be overridden later).
@@ -264,9 +264,10 @@ SRD_API int srd_inst_channel_set_all(struct srd_decoder_inst *di,
 	for (i = 0; i < di->dec_num_channels; i++)
 		new_channelmap[i] = -1;
 
-	for (l = g_hash_table_get_keys(new_channels); l; l = l->next) {
-		channel_id = l->data;
-		channel_val = g_hash_table_lookup(new_channels, channel_id);
+	g_hash_table_iter_init(&iter, new_channels);
+	while (g_hash_table_iter_next(&iter, &key, &value)) {
+		channel_id = key;
+		channel_val = value;
 		if (!g_variant_is_of_type(channel_val, G_VARIANT_TYPE_INT32)) {
 			/* Channel name was specified without a value. */
 			srd_err("No channel number was specified for %s.",
@@ -355,13 +356,8 @@ SRD_API struct srd_decoder_inst *srd_inst_new(struct srd_session *sess,
 		return NULL;
 	}
 
-	di = g_try_malloc0(sizeof(struct srd_decoder_inst));
-	if (di == NULL){
-		srd_err("%s,ERROR:failed to alloc memory.", __func__);
-		return NULL;
-	}
-	memset(di, 0, sizeof(struct srd_decoder_inst));
-	
+	di = g_malloc0(sizeof(struct srd_decoder_inst));
+
 	di->decoder = dec;
 	di->sess = sess;
 
@@ -381,50 +377,50 @@ SRD_API struct srd_decoder_inst *srd_inst_new(struct srd_session *sess,
 		}
 	}
 
-	gstate = PyGILState_Ensure();
-
 	/*
 	 * Prepare a default channel map, where samples come in the
 	 * order in which the decoder class defined them.
 	 */
-    di->py_pinvalues = NULL;
 	di->dec_num_channels = g_slist_length(di->decoder->channels) +
 			g_slist_length(di->decoder->opt_channels);
-			
-	if (di->dec_num_channels > 0) {
-		di->dec_channelmap = g_try_malloc0(sizeof(int) * di->dec_num_channels);
-
-		if (di->dec_channelmap == NULL){
-			PyGILState_Release(gstate);
-			srd_err("%s,ERROR:failed to alloc memory.", __func__);
-			return NULL;
-		}
-
+	if (di->dec_num_channels) {
+		di->dec_channelmap =
+				g_malloc(sizeof(int) * di->dec_num_channels);
 		for (i = 0; i < di->dec_num_channels; i++)
 			di->dec_channelmap[i] = i;
-
-        di->py_pinvalues = PyTuple_New(di->dec_num_channels);
+		/*
+		 * Will be used to prepare a sample at every iteration
+		 * of the instance's decode() method.
+		 */
+		di->channel_samples = g_malloc(di->dec_num_channels);
 	}
 
 	/* Default to the initial pins being the same as in sample 0. */
 	oldpins_array_seed(di);
 
+	gstate = PyGILState_Ensure();
+
 	/* Create a new instance of this decoder class. */
 	if (!(di->py_inst = PyObject_CallObject(dec->py_dec, NULL))) {
 		if (PyErr_Occurred())
-            srd_exception_catch(NULL, "Failed to create %s instance",
+			srd_exception_catch("Failed to create %s instance",
 					decoder_id);
-        goto err;
+		PyGILState_Release(gstate);
+		g_free(di->dec_channelmap);
+		g_free(di);
+		return NULL;
 	}
 
-    if (options && srd_inst_option_set(di, options) != SRD_OK) {
-        goto err;
-	}
+	PyGILState_Release(gstate);
 
-    PyGILState_Release(gstate);
+	if (options && srd_inst_option_set(di, options) != SRD_OK) {
+		g_free(di->dec_channelmap);
+		g_free(di);
+		return NULL;
+	}
 
 	di->condition_list = NULL;
-    di->match_array = 0;
+	di->match_array = NULL;
 	di->abs_start_samplenum = 0;
 	di->abs_end_samplenum = 0;
 	di->inbuf = NULL;
@@ -435,8 +431,6 @@ SRD_API struct srd_decoder_inst *srd_inst_new(struct srd_session *sess,
 	di->handled_all_samples = FALSE;
 	di->want_wait_terminate = FALSE;
 	di->decoder_state = SRD_OK;
-	di->python_proc_error = NULL;
-	di->is_task_stop_signal = FALSE;
 
 	/*
 	 * Strictly speaking initialization of statically allocated
@@ -453,12 +447,6 @@ SRD_API struct srd_decoder_inst *srd_inst_new(struct srd_session *sess,
 	srd_dbg("Creating new %s instance %s.", decoder_id, di->inst_id);
 
 	return di;
-
-err:
-    PyGILState_Release(gstate);
-    g_free(di->dec_channelmap);
-    g_free(di);
-    return NULL;
 }
 
 static void srd_inst_join_decode_thread(struct srd_decoder_inst *di)
@@ -476,9 +464,7 @@ static void srd_inst_join_decode_thread(struct srd_decoder_inst *di)
 	 */
 	srd_dbg("%s: Raising want_term, sending got_new.", di->inst_id);
 	g_mutex_lock(&di->data_mutex);
-	//srd_err("set flag =true");
 	di->want_wait_terminate = TRUE;
-	di->is_task_stop_signal = TRUE;
 	g_cond_signal(&di->got_new_samples_cond);
 	g_mutex_unlock(&di->data_mutex);
 
@@ -508,6 +494,7 @@ static void srd_inst_reset_state(struct srd_decoder_inst *di)
 
 	/* Reset internal state of the decoder. */
 	condition_list_free(di);
+	match_array_free(di);
 	di->abs_start_samplenum = 0;
 	di->abs_end_samplenum = 0;
 	di->inbuf = NULL;
@@ -694,9 +681,9 @@ SRD_API int srd_inst_initial_pins_set_all(struct srd_decoder_inst *di, GArray *i
 }
 
 /** @private */
-SRD_PRIV int srd_inst_start(struct srd_decoder_inst *di, char **error)
+SRD_PRIV int srd_inst_start(struct srd_decoder_inst *di)
 {
-	PyObject *py_res;
+	PyObject *py_res, *py_samplenum;
 	GSList *l;
 	struct srd_decoder_inst *next_di;
 	int ret;
@@ -708,34 +695,27 @@ SRD_PRIV int srd_inst_start(struct srd_decoder_inst *di, char **error)
 
 	/* Run self.start(). */
 	if (!(py_res = PyObject_CallMethod(di->py_inst, "start", NULL))) {
-        srd_exception_catch(error, "Protocol decoder instance %s",
+		srd_exception_catch("Protocol decoder instance %s",
 				di->inst_id);
 		PyGILState_Release(gstate);
 		return SRD_ERR_PYTHON;
 	}
-	Py_DecRef(py_res);
-
-    /* first pos */
-    di->first_pos = TRUE;
-
-    /* none matched */
-    di->abs_cur_matched = FALSE;
-
-    /* skip zero flag */
-    di->skip_zero = FALSE;
+	Py_DECREF(py_res);
 
 	/* Set self.samplenum to 0. */
-	PyObject_SetAttrString(di->py_inst, "samplenum", PyLong_FromLong(0));
+	py_samplenum = PyLong_FromLong(0);
+	PyObject_SetAttrString(di->py_inst, "samplenum", py_samplenum);
+	Py_DECREF(py_samplenum);
 
-    /* Set self.matched to 0. */
-    PyObject_SetAttrString(di->py_inst, "matched", PyLong_FromLong(0));
+	/* Set self.matched to None. */
+	PyObject_SetAttrString(di->py_inst, "matched", Py_None);
 
 	PyGILState_Release(gstate);
 
 	/* Start all the PDs stacked on top of this one. */
 	for (l = di->next_di; l; l = l->next) {
 		next_di = l->data;
-        if ((ret = srd_inst_start(next_di, error)) != SRD_OK)
+		if ((ret = srd_inst_start(next_di)) != SRD_OK)
 			return ret;
 	}
 
@@ -802,6 +782,16 @@ static inline gboolean sample_matches(uint8_t old_sample, uint8_t sample, struct
 }
 
 /** @private */
+SRD_PRIV void match_array_free(struct srd_decoder_inst *di)
+{
+	if (!di || !di->match_array)
+		return;
+
+	g_array_free(di->match_array, TRUE);
+	di->match_array = NULL;
+}
+
+/** @private */
 SRD_PRIV void condition_list_free(struct srd_decoder_inst *di)
 {
 	GSList *l, *ll;
@@ -815,7 +805,7 @@ SRD_PRIV void condition_list_free(struct srd_decoder_inst *di)
 			g_slist_free_full(ll, g_free);
 	}
 
-    g_slist_free(di->condition_list);
+	g_slist_free(di->condition_list);
 	di->condition_list = NULL;
 }
 
@@ -835,87 +825,72 @@ static gboolean have_non_null_conds(const struct srd_decoder_inst *di)
 	return FALSE;
 }
 
-static void update_old_pins_array(struct srd_decoder_inst *di)
+static void update_old_pins_array(struct srd_decoder_inst *di,
+		const uint8_t *sample_pos)
 {
 	uint8_t sample;
-    int i, bit_offset;
-    const uint8_t *sample_pos;
+	int i, byte_offset, bit_offset;
 
-    if (!di || !di->dec_channelmap)
+	if (!di || !di->dec_channelmap || !sample_pos)
 		return;
 
 	oldpins_array_seed(di);
 	for (i = 0; i < di->dec_num_channels; i++) {
-        if (*(di->inbuf + i) == NULL) {
-            sample = *(di->inbuf_const + i) ? 1 : 0;
-            di->old_pins_array->data[i] = sample;
-        } else {
-            sample_pos = *(di->inbuf + i) + ((di->abs_cur_samplenum - di->abs_start_samplenum) / 8);
-            bit_offset = (di->abs_cur_samplenum - di->abs_start_samplenum) % 8;
-            sample = *sample_pos & (1 << bit_offset) ? 1 : 0;
-            di->old_pins_array->data[i] = sample;
-        }
+		if (di->dec_channelmap[i] == -1)
+			continue; /* Ignore unused optional channels. */
+		byte_offset = di->dec_channelmap[i] / 8;
+		bit_offset = di->dec_channelmap[i] % 8;
+		sample = *(sample_pos + byte_offset) & (1 << bit_offset) ? 1 : 0;
+		di->old_pins_array->data[i] = sample;
 	}
 }
 
 static void update_old_pins_array_initial_pins(struct srd_decoder_inst *di)
 {
 	uint8_t sample;
-    int i, bit_offset;
+	int i, byte_offset, bit_offset;
 	const uint8_t *sample_pos;
 
 	if (!di || !di->dec_channelmap)
 		return;
 
+	sample_pos = di->inbuf + ((di->abs_cur_samplenum - di->abs_start_samplenum) * di->data_unitsize);
+
 	oldpins_array_seed(di);
 	for (i = 0; i < di->dec_num_channels; i++) {
 		if (di->old_pins_array->data[i] != SRD_INITIAL_PIN_SAME_AS_SAMPLE0)
 			continue;
-
-        if (*(di->inbuf + i) == NULL) {
-            sample = *(di->inbuf_const + i) ? 1 : 0;
-            di->old_pins_array->data[i] = sample;
-        } else {
-            sample_pos = *(di->inbuf + i) + ((di->abs_cur_samplenum - di->abs_start_samplenum) / 8);
-            bit_offset = (di->abs_cur_samplenum - di->abs_start_samplenum) % 8;
-            sample = *sample_pos & (1 << bit_offset) ? 1 : 0;
-            di->old_pins_array->data[i] = sample;
-        }
+		if (di->dec_channelmap[i] == -1)
+			continue; /* Ignore unused optional channels. */
+		byte_offset = di->dec_channelmap[i] / 8;
+		bit_offset = di->dec_channelmap[i] % 8;
+		sample = *(sample_pos + byte_offset) & (1 << bit_offset) ? 1 : 0;
+		di->old_pins_array->data[i] = sample;
 	}
 }
 
-static gboolean term_matches(struct srd_decoder_inst *di,
-        struct srd_term *term, gboolean *skip_allow)
+static gboolean term_matches(const struct srd_decoder_inst *di,
+		struct srd_term *term, const uint8_t *sample_pos)
 {
 	uint8_t old_sample, sample;
-    int bit_offset, ch;
-    const uint8_t *sample_pos;
+	int byte_offset, bit_offset, ch;
 
 	/* Caller ensures di, di->dec_channelmap, term, sample_pos != NULL. */
 
-    *skip_allow = FALSE;
-    if (term->type == SRD_TERM_SKIP) {
-        if (di->abs_cur_matched && term->num_samples_to_skip == 0)
-            di->skip_zero = TRUE;
+	if (term->type == SRD_TERM_SKIP)
 		return sample_matches(0, 0, term);
-    }
 
 	ch = term->channel;
-    if (*(di->inbuf + ch) == NULL) {
-        sample = *(di->inbuf_const + ch) ? 1 : 0;
-        *skip_allow = TRUE;
-    } else {
-        sample_pos = *(di->inbuf + ch) + ((di->abs_cur_samplenum - di->abs_start_samplenum) / 8);
-        bit_offset = (di->abs_cur_samplenum - di->abs_start_samplenum) % 8;
-        sample = *sample_pos & (1 << bit_offset) ? 1 : 0;
-    }
+	byte_offset = di->dec_channelmap[ch] / 8;
+	bit_offset = di->dec_channelmap[ch] % 8;
+	sample = *(sample_pos + byte_offset) & (1 << bit_offset) ? 1 : 0;
 	old_sample = di->old_pins_array->data[ch];
 
 	return sample_matches(old_sample, sample, term);
 }
 
-static gboolean all_terms_match(struct srd_decoder_inst *di,
-        const GSList *cond, gboolean *skip_allow)
+static gboolean all_terms_match(const struct srd_decoder_inst *di,
+		const GSList *cond, const uint8_t *sample_pos)
 {
 	const GSList *l;
 	struct srd_term *term;
@@ -924,81 +899,83 @@ static gboolean all_terms_match(struct srd_decoder_inst *di,
 
 	for (l = cond; l; l = l->next) {
 		term = l->data;
-        if (!term_matches(di, term, skip_allow))
+		if (term->type == SRD_TERM_ALWAYS_FALSE)
+			return FALSE;
+		if (!term_matches(di, term, sample_pos))
 			return FALSE;
 	}
 
-    if (di->skip_zero) {
-        di->abs_cur_samplenum--;
-        di->skip_zero = FALSE;
-    }
 	return TRUE;
 }
 
-static gboolean 
-find_match(struct srd_decoder_inst *di)
+static gboolean at_least_one_condition_matched(
+		const struct srd_decoder_inst *di, unsigned int num_conditions)
 {
-    uint64_t j;
+	unsigned int i;
+
+	/* Caller ensures di != NULL. */
+
+	for (i = 0; i < num_conditions; i++) {
+		if (di->match_array->data[i])
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
+static gboolean find_match(struct srd_decoder_inst *di)
+{
+	uint64_t i, j, num_samples_to_process;
 	GSList *l, *cond;
-    gboolean skip_allow;
-    gboolean all_skip_allow = TRUE;
+	const uint8_t *sample_pos;
+	unsigned int num_conditions;
 
 	/* Caller ensures di != NULL. */
 
 	/* Check whether the condition list is NULL/empty. */
-    if (!di->condition_list) {
-        srd_dbg("NULL/empty condition list, automatic match.");
-        return TRUE;
-    }
+	if (!di->condition_list) {
+		srd_dbg("NULL/empty condition list, automatic match.");
+		return TRUE;
+	}
 
 	/* Check whether we have any non-NULL conditions. */
-    if (!have_non_null_conds(di)) {
-        srd_dbg("Only NULL conditions in list, automatic match.");
-        return TRUE;
-    }
+	if (!have_non_null_conds(di)) {
+		srd_dbg("Only NULL conditions in list, automatic match.");
+		return TRUE;
+	}
 
-    /* di->match_array is 0 here. Create a new GArray. */
-    di->match_array = 0;
+	num_samples_to_process = di->abs_end_samplenum - di->abs_cur_samplenum;
+	num_conditions = g_slist_length(di->condition_list);
+
+	/* A condition may span chunks; release its previous chunk result. */
+	match_array_free(di);
+	di->match_array = g_array_sized_new(FALSE, TRUE, sizeof(gboolean), num_conditions);
+	g_array_set_size(di->match_array, num_conditions);
 
 	/* Sample 0: Set di->old_pins_array for SRD_INITIAL_PIN_SAME_AS_SAMPLE0 pins. */
-    if (di->first_pos) {
-        di->first_pos = FALSE;
+	if (di->abs_cur_samplenum == 0)
 		update_old_pins_array_initial_pins(di);
-    }
 
-    if (di->abs_cur_matched)
-        di->abs_cur_samplenum++;
+	for (i = 0; i < num_samples_to_process; i++, (di->abs_cur_samplenum)++) {
 
-    while (di->abs_cur_samplenum < di->abs_end_samplenum) {
+		sample_pos = di->inbuf + ((di->abs_cur_samplenum - di->abs_start_samplenum) * di->data_unitsize);
 
-        /* Check whether the current sample matches at least one of the conditions (logical OR). */
-        /* IMPORTANT: We need to check all conditions, even if there was a match already! */
-        for (l = di->condition_list, j = 0; l; l = l->next, j++) {
-            cond = l->data;
-            if (!cond)
-                continue;
+		/* Check whether the current sample matches at least one of the conditions (logical OR). */
+		/* IMPORTANT: We need to check all conditions, even if there was a match already! */
+		for (l = di->condition_list, j = 0; l; l = l->next, j++) {
+			cond = l->data;
+			if (!cond)
+				continue;
+			/* All terms in 'cond' must match (logical AND). */
+			di->match_array->data[j] = all_terms_match(di, cond, sample_pos);
+		}
 
-            /* All terms in 'cond' must match (logical AND). */
-            if (all_terms_match(di, cond, &skip_allow)) {
-                all_skip_allow = FALSE;
-                di->match_array |= (1 << j);
-            } else {
-                all_skip_allow &= skip_allow;
-            }
-        }
+		update_old_pins_array(di, sample_pos);
 
-        update_old_pins_array(di);
-
-        /* If at least one condition matched we're done. */
-        di->abs_cur_matched = (di->match_array != 0);
-        if (di->abs_cur_matched)
-            return TRUE;
-
-        if (all_skip_allow)
-            di->abs_cur_samplenum = di->abs_end_samplenum;
-        else
-            di->abs_cur_samplenum++;
-    }
+		/* If at least one condition matched we're done. */
+		if (at_least_one_condition_matched(di, num_conditions))
+			return TRUE;
+	}
 
 	return FALSE;
 }
@@ -1032,10 +1009,10 @@ SRD_PRIV int process_samples_until_condition_match(struct srd_decoder_inst *di, 
 	/* Check if any of the current condition(s) match. */
 	while (TRUE) {
 		/* Feed the (next chunk of the) buffer to find_match(). */
-        *found_match = find_match(di);
+		*found_match = find_match(di);
 
 		/* Did we handle all samples yet? */
-        if (di->abs_cur_samplenum >= di->abs_end_samplenum) {
+		if (di->abs_cur_samplenum >= di->abs_end_samplenum) {
 			srd_dbg("Done, handled all samples (abs cur %" PRIu64
 				" / abs end %" PRIu64 ").",
 				di->abs_cur_samplenum, di->abs_end_samplenum);
@@ -1065,13 +1042,13 @@ static gpointer di_thread(gpointer data)
 {
 	PyObject *py_res;
 	struct srd_decoder_inst *di;
-	int wanted_term = 0;
+	int wanted_term;
 	PyGILState_STATE gstate;
-	int is_task_stop_signal = FALSE;
 
-	assert(data);
+	if (!data)
+		return NULL;
 
-	di = data; 
+	di = data;
 
 	srd_dbg("%s: Starting thread routine for decoder.", di->inst_id);
 
@@ -1081,45 +1058,13 @@ static gpointer di_thread(gpointer data)
 	 * Call self.decode(). Only returns if the PD throws an exception.
 	 * "Regular" termination of the decode() method is not expected.
 	 */
+    /* The instance owns py_inst and joins this worker before releasing it. */
 	srd_dbg("%s: Calling decode().", di->inst_id);
 	py_res = PyObject_CallMethod(di->py_inst, "decode", NULL);
 	srd_dbg("%s: decode() terminated.", di->inst_id);
 
-	is_task_stop_signal = di->is_task_stop_signal;
-	//srd_err("get flag:%d", is_task_stop_signal);
-
-	/**
-	 * decode() returns a error!
-	 * before the send thread exits, write the error
-	 * 
-	*/
-	if (py_res){
-		
+	if (!py_res)
 		di->decoder_state = SRD_ERR;
-
-		if (PyUnicode_Check(py_res))
-		{
-			PyObject *py_bytes = PyUnicode_AsUTF8String(py_res);
-			char *err_str = PyBytes_AsString(py_bytes);
-			srd_err("python method decode() returns an error:\n %s", err_str);
-			di->python_proc_error = g_strdup(err_str);
-		}
-		else{
-			di->python_proc_error = g_strdup("python method decode() returns an unknown type error!");
-		}
-
-		Py_DecRef(py_res);
-	}
-	
-	/**
-	 * decode() throw an except!
-	 * before the send thread exits, write the error
-	 * 
-	*/
-	if (!py_res && !is_task_stop_signal)
-	{
-		srd_exception_catch(&di->python_proc_error, "Protocol decoder instance %s: ", di->inst_id);
-	}
 
 	/*
 	 * Make sure to unblock potentially pending srd_inst_decode()
@@ -1134,18 +1079,47 @@ static gpointer di_thread(gpointer data)
 	di->handled_all_samples = TRUE;
 	g_cond_signal(&di->handled_all_samples_cond);
 	g_mutex_unlock(&di->data_mutex);
- 
-	/*
-	 * normal
-	 * except
-	 * returns a value
-	 * task_stop_signal
-	 */
-	if (!is_task_stop_signal)
-		srd_dbg("%s: decode() terminated (req %d).", di->inst_id, wanted_term);
 
-	PyErr_Clear();	
-	PyGILState_Release(gstate); 
+	/*
+	 * Check for the termination cause of the decode() method.
+	 * Though this is mostly for information.
+	 */
+	if (!py_res && wanted_term) {
+		/*
+		 * Silently ignore errors upon return from decode() calls
+		 * when termination was requested. Terminate the thread
+		 * which executed this instance's decode() logic.
+		 */
+		srd_dbg("%s: Thread done (!res, want_term).", di->inst_id);
+		PyErr_Clear();
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+	if (!py_res) {
+		/*
+		 * The decode() invocation terminated unexpectedly. Have
+		 * the back trace printed, and terminate the thread which
+		 * executed the decode() method.
+		 */
+		srd_dbg("%s: decode() terminated unrequested.", di->inst_id);
+		srd_exception_catch("Protocol decoder instance %s: ", di->inst_id);
+		srd_dbg("%s: Thread done (!res, !want_term).", di->inst_id);
+		PyGILState_Release(gstate);
+		return NULL;
+	}
+
+	/*
+	 * TODO: By design the decode() method is not supposed to terminate.
+	 * Nevertheless we have the thread joined, and srd backend calls to
+	 * decode() will re-start another thread transparently.
+	 */
+	srd_dbg("%s: decode() terminated (req %d).", di->inst_id, wanted_term);
+	Py_DECREF(py_res);
+	PyErr_Clear();
+
+	PyGILState_Release(gstate);
+
+	srd_dbg("%s: Thread done (with res).", di->inst_id);
 
 	return NULL;
 }
@@ -1202,26 +1176,25 @@ static gpointer di_thread(gpointer data)
  */
 SRD_PRIV int srd_inst_decode(struct srd_decoder_inst *di,
 		uint64_t abs_start_samplenum, uint64_t abs_end_samplenum,
-        const uint8_t **inbuf, const uint8_t *inbuf_const, uint64_t inbuflen,
-        char **error)
+		const uint8_t *inbuf, uint64_t inbuflen, uint64_t unitsize)
 {
 	/* Return an error upon unusable input. */
 	if (!di) {
-        *error = g_strdup("empty decoder instance");
+		srd_dbg("empty decoder instance");
 		return SRD_ERR_ARG;
 	}
 	if (!inbuf) {
-        *error = g_strdup("NULL buffer pointer");
+		srd_dbg("NULL buffer pointer");
 		return SRD_ERR_ARG;
 	}
 	if (inbuflen == 0) {
-        *error = g_strdup("empty buffer");
+		srd_dbg("empty buffer");
 		return SRD_ERR_ARG;
 	}
-
-    if (di->first_pos) {
-        di->abs_cur_samplenum = abs_start_samplenum;
-    }
+	if (unitsize == 0) {
+		srd_dbg("unitsize 0");
+		return SRD_ERR_ARG;
+	}
 
 	if (abs_start_samplenum != di->abs_cur_samplenum ||
 	    abs_end_samplenum < abs_start_samplenum) {
@@ -1231,29 +1204,32 @@ SRD_PRIV int srd_inst_decode(struct srd_decoder_inst *di,
 		return SRD_ERR_ARG;
 	}
 
-	srd_dbg("Decoding: abs start sample %" PRIu64 ", abs end sample %"
-        PRIu64 " (%" PRIu64 " samples, %" PRIu64 " bytes), instance %s.",
-        abs_start_samplenum, abs_end_samplenum,
-        abs_end_samplenum - abs_start_samplenum, inbuflen, di->inst_id);
+    if (unitsize > INT_MAX || abs_end_samplenum - abs_start_samplenum > inbuflen / unitsize)
+        return SRD_ERR_ARG;
+    for (int index = 0; index < di->dec_num_channels; index++)
+        if (di->dec_channelmap[index] >= 0 && (uint64_t)di->dec_channelmap[index] / 8 >= unitsize)
+            return SRD_ERR_ARG;
+	di->data_unitsize = unitsize;
 
-	/* 
-		If this is the first call, start the worker thread. 
-		One session may be have more decoder,so more thread will be created
-	*/
+	srd_dbg("Decoding: abs start sample %" PRIu64 ", abs end sample %"
+		PRIu64 " (%" PRIu64 " samples, %" PRIu64 " bytes, unitsize = "
+		"%d), instance %s.", abs_start_samplenum, abs_end_samplenum,
+		abs_end_samplenum - abs_start_samplenum, inbuflen, di->data_unitsize,
+		di->inst_id);
+
+	/* If this is the first call, start the worker thread. */
 	if (!di->thread_handle) {
 		srd_dbg("No worker thread for this decoder stack "
 			"exists yet, creating one: %s.", di->inst_id);
-
 		di->thread_handle = g_thread_new(di->inst_id,
-						 		di_thread, di);
+						 di_thread, di);
 	}
 
 	/* Push the new sample chunk to the worker thread. */
 	g_mutex_lock(&di->data_mutex);
-    di->abs_start_samplenum = abs_start_samplenum & ~7ULL;
+	di->abs_start_samplenum = abs_start_samplenum;
 	di->abs_end_samplenum = abs_end_samplenum;
 	di->inbuf = inbuf;
-    di->inbuf_const = inbuf_const;
 	di->inbuflen = inbuflen;
 	di->got_new_samples = TRUE;
 	di->handled_all_samples = FALSE;
@@ -1268,14 +1244,8 @@ SRD_PRIV int srd_inst_decode(struct srd_decoder_inst *di,
 		g_cond_wait(&di->handled_all_samples_cond, &di->data_mutex);
 	g_mutex_unlock(&di->data_mutex);
 
-
-	//the python got error
-	if (di->python_proc_error)
-	{
-		*error = di->python_proc_error;
-		di->python_proc_error = NULL;
+	if (di->want_wait_terminate)
 		return SRD_ERR_TERM_REQ;
-	}				
 
 	return SRD_OK;
 }
@@ -1358,25 +1328,22 @@ SRD_PRIV void srd_inst_free(struct srd_decoder_inst *di)
 	srd_inst_reset_state(di);
 
 	gstate = PyGILState_Ensure();
-	Py_DecRef(di->py_inst);
-    if (di->py_pinvalues) {
-        Py_DecRef(di->py_pinvalues);
-    }
+	Py_DECREF(di->py_inst);
 	PyGILState_Release(gstate);
 
 	g_free(di->inst_id);
 	g_free(di->dec_channelmap);
-	g_slist_free(di->next_di);
+	g_free(di->channel_samples);
+	g_slist_free_full(di->next_di, (GDestroyNotify)srd_inst_free);
 	for (l = di->pd_output; l; l = l->next) {
 		pdo = l->data;
 		g_free(pdo->proto_id);
-        if (pdo->meta_name)
-            g_free(pdo->meta_name);
-        if (pdo->meta_descr)
-            g_free(pdo->meta_descr);
 		g_free(pdo);
 	}
 	g_slist_free(di->pd_output);
+	g_cond_clear(&di->got_new_samples_cond);
+	g_cond_clear(&di->handled_all_samples_cond);
+	g_mutex_clear(&di->data_mutex);
 	g_free(di);
 }
 

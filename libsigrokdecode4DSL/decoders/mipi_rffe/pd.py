@@ -23,6 +23,7 @@
 # TODO: Implement support for detecting various bus errors.
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 '''
 OUTPUT_PYTHON format:
@@ -195,20 +196,20 @@ class Decoder(srd.Decoder):
             while True :
                 if self._display :
                     (sclk, sdata) = self.wait([{0: 'f'},{0: 'l', 1: 'e'}])
-                    if (self.matched & (0b1 << 0)):
+                    if (match_mask(self.matched) & (0b1 << 0)):
                         self.databyte <<= 1
                         self.databyte |= sdata
                         break
-                    if (self.matched & (0b1 << 1)):
+                    if (match_mask(self.matched) & (0b1 << 1)):
                         self.ss = self.samplenum
                         (sclk, sdata) = self.wait([{0: 'f'},{0: 'l', 1: 'e'}])
-                        if (self.matched & (0b1 << 0)):
+                        if (match_mask(self.matched) & (0b1 << 0)):
                             self.es = self.samplenum
                             self.putx([proto['IJE'][0], proto['IJE'][1:]])
                             self.databyte <<= 1
                             self.databyte |= sdata
                             break
-                        if (self.matched & (0b1 << 1)):
+                        if (match_mask(self.matched) & (0b1 << 1)):
                             self.es = self.samplenum                        
                             self.putx([proto['IJE'][0], proto['IJE'][1:]])
                 else :
@@ -223,20 +224,20 @@ class Decoder(srd.Decoder):
         while True :
             if self._display :
                 (sclk, sdata) = self.wait([{0: 'f'},{0: 'l', 1: 'e'}])
-                if (self.matched & (0b1 << 0)):
+                if (match_mask(self.matched) & (0b1 << 0)):
                     self.databyte <<= 1
                     self.databyte |= sdata
                     break
-                if (self.matched & (0b1 << 1)):
+                if (match_mask(self.matched) & (0b1 << 1)):
                     self.ss = self.samplenum
                     (sclk, sdata) = self.wait([{0: 'f'},{0: 'l', 1: 'e'}])
-                    if (self.matched & (0b1 << 0)):
+                    if (match_mask(self.matched) & (0b1 << 0)):
                         self.es = self.samplenum
                         self.putx([proto['IJE'][0], proto['IJE'][1:]])
                         self.databyte <<= 1
                         self.databyte |= sdata
                         break
-                    if (self.matched & (0b1 << 1)):
+                    if (match_mask(self.matched) & (0b1 << 1)):
                         self.es = self.samplenum                        
                         self.putx([proto['IJE'][0], proto['IJE'][1:]])
             else :
@@ -353,16 +354,16 @@ class Decoder(srd.Decoder):
             while True :
                 if self._display :
                     (sclk,self.sdata) = self.wait([{0: 'f'},{0: 'l', 1: 'e'}])
-                    if (self.matched & (0b1 << 0)):
+                    if (match_mask(self.matched) & (0b1 << 0)):
                         break
-                    if (self.matched & (0b1 << 1)):
+                    if (match_mask(self.matched) & (0b1 << 1)):
                         self.ss = self.samplenum
                         (sclk,self.sdata) = self.wait([{0: 'f'},{0: 'l', 1: 'e'}])
-                        if (self.matched & (0b1 << 0)):
+                        if (match_mask(self.matched) & (0b1 << 0)):
                             self.es = self.samplenum
                             self.putx([proto['IJE'][0], proto['IJE'][1:]])
                             break
-                        if (self.matched & (0b1 << 1)):
+                        if (match_mask(self.matched) & (0b1 << 1)):
                             self.es = self.samplenum
                             self.putx([proto['IJE'][0], proto['IJE'][1:]])
                 else :
@@ -403,13 +404,13 @@ class Decoder(srd.Decoder):
                 self.wait({0: 'l', 1: 'r'})
                 self.BPss = self.samplenum   
                 self.wait([{0: 'h'},{0: 'l', 1: 'f'}])
-                if (self.matched & (0b1 << 0)):
+                if (match_mask(self.matched) & (0b1 << 0)):
                     continue
-                if (self.matched & (0b1 << 1)):
+                if (match_mask(self.matched) & (0b1 << 1)):
                     self.wait([{0: 'l', 1: 'e'},{0: 'r'}])
-                    if (self.matched & (0b1 << 0)):
+                    if (match_mask(self.matched) & (0b1 << 0)):
                         continue
-                    if (self.matched & (0b1 << 1)):
+                    if (match_mask(self.matched) & (0b1 << 1)):
                         self.ss,self.es = self.BPss,self.samplenum
                         self.putx([proto['SSC'][0], proto['SSC'][1:]])
                         self.state = 'FIND SLAVE ADDRESS'

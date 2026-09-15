@@ -39,6 +39,7 @@
 #   only become necessary when the text lines' content shall get inspected.
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 from common.srdhelper import bitpack
 
 '''
@@ -625,12 +626,12 @@ class Decoder(srd.Decoder):
             data, clk = pins[PIN_DATA], pins[PIN_CLK]
             atn, = self.invert_pins([pins[PIN_ATN]])
 
-            if self.matched & 0b1:
+            if match_mask(self.matched) & 0b1:
                 # Falling edge on ATN, reset step.
                 step = STEP_WAIT_READY_TO_SEND
 
             if step == STEP_WAIT_READY_TO_SEND:
-                # Don't use self.matched_[1] here since we might come from
+                # Don't use match_mask(self.matched)_[1] here since we might come from
                 # a step with different conds due to the code above.
                 if data == 0 and clk == 1:
                     # Rising edge on CLK while DATA is low: Ready to send.
@@ -655,7 +656,7 @@ class Decoder(srd.Decoder):
                     step = STEP_CLOCK_DATA_BITS
                     ss_bit = self.samplenum
             elif step == STEP_CLOCK_DATA_BITS:
-                if self.matched & 0b10:
+                if match_mask(self.matched) & 0b10:
                     if clk == 1:
                         # Rising edge on CLK; latch DATA.
                         bits.append(data)
@@ -673,7 +674,7 @@ class Decoder(srd.Decoder):
                             step = STEP_WAIT_READY_TO_SEND
 
     def check_bit(self, d):
-        v = self.matched & (1 << d)
+        v = match_mask(self.matched) & (1 << d)
         return (v >> d) == 1
 
     def decode_parallel(self, has_data_n, has_dav, has_atn, has_eoi, has_srq):

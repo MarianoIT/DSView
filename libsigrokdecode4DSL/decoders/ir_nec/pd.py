@@ -21,6 +21,7 @@
 from common.srdhelper import bitpack
 from .lists import *
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 # Concentrate all timing constraints of the IR protocol here in a single
 # location at the top of the source, to raise awareness and to simplify
@@ -237,7 +238,7 @@ class Decoder(srd.Decoder):
             # carrier period before they get passed to decoding logic.
             if cd_count:
                 (cur_ir,) = self.wait([{Pin.IR: 'e'}, {'skip': cd_count}])
-                if (self.matched & (0b1 << 0)):
+                if (match_mask(self.matched) & (0b1 << 0)):
                     cur_ir = active
                 if cur_ir == prev_ir:
                     continue

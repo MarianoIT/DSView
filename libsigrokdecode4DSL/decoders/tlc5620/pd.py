@@ -19,6 +19,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 dacs = {
     0: 'DACA',
@@ -202,9 +203,9 @@ class Decoder(srd.Decoder):
             self.ldac = ldac
 
             # Handle those conditions (one or more) that matched this time.
-            if (self.matched & (0b1 << 0)):
+            if (match_mask(self.matched) & (0b1 << 0)):
                 self.handle_new_dac_bit(data)
-            if (self.matched & (0b1 << 1)):
+            if (match_mask(self.matched) & (0b1 << 1)):
                 self.handle_falling_edge_load()
-            if (self.matched & (0b1 << 2)):
+            if (match_mask(self.matched) & (0b1 << 2)):
                 self.handle_falling_edge_ldac()

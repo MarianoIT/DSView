@@ -18,6 +18,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 class SamplerateError(Exception):
     pass
@@ -146,7 +147,7 @@ class Decoder(srd.Decoder):
             (self.ir,) = self.wait(conditions)
 
             if len(conditions) == 2:
-                if self.matched & 0b10:
+                if match_mask(self.matched) & 0b10:
                     self.state = 'IDLE'
 
             self.edges.append(self.samplenum)

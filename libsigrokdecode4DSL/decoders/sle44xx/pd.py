@@ -19,6 +19,7 @@
 
 from common.srdhelper import bitpack_lsb
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 class Pin:
     RST, CLK, IO, = range(3)
@@ -444,7 +445,7 @@ class Decoder(srd.Decoder):
         self.handle_data_byte(ss, es, data, bits)
 
     def check_bit(self, d):
-        v = self.matched & (1 << d)
+        v = match_mask(self.matched) & (1 << d)
         return (v >> d) == 1
 
     def decode(self):

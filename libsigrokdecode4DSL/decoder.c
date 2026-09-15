@@ -2,8 +2,8 @@
  * This file is part of the libsigrokdecode project.
  *
  * Copyright (C) 2010 Uwe Hermann <uwe@hermann-uwe.de>
- * Copyright (C) 2012 Bert Vermeulen <bert@biot.com>
  * Copyright (C) 2019 DreamSourceLab <support@dreamsourcelab.com>
+ * Copyright (C) 2012 Bert Vermeulen <bert@biot.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,6 @@
 #include "libsigrokdecode-internal.h" /* First, so we avoid a _POSIX_C_SOURCE warning. */
 #include "libsigrokdecode.h"
 #include <glib.h>
-#include "log.h"
 
 /**
  * @file
@@ -41,10 +40,7 @@
 
 /** @cond PRIVATE */
 
-/* 
-	The list of loaded protocol decoders. 
-	Is srd_decoder* type
-*/
+/* The list of loaded protocol decoders. */
 static GSList *pd_list = NULL;
 
 /* srd.c */
@@ -112,10 +108,10 @@ static void channel_free(void *data)
 	if (!ch)
 		return;
 
-	safe_free(ch->desc);
-	safe_free(ch->name);
-	safe_free(ch->id);
-	safe_free(ch->idn);
+	g_free(ch->desc);
+	g_free(ch->name);
+	g_free(ch->idn);
+	g_free(ch->id);
 	g_free(ch);
 }
 
@@ -151,9 +147,9 @@ static void decoder_option_free(void *data)
 
 	g_slist_free_full(opt->values, &variant_free);
 	variant_free(opt->def);
-	safe_free(opt->desc);
-	safe_free(opt->id);
-	safe_free(opt->idn);
+	g_free(opt->desc);
+	g_free(opt->idn);
+	g_free(opt->id);
 	g_free(opt);
 }
 
@@ -176,9 +172,10 @@ static void decoder_free(struct srd_decoder *dec)
 	g_slist_free_full(dec->opt_channels, &channel_free);
 	g_slist_free_full(dec->channels, &channel_free);
 
+	g_slist_free_full(dec->tags, g_free);
+    g_slist_free(dec->ann_types);
 	g_slist_free_full(dec->outputs, g_free);
 	g_slist_free_full(dec->inputs, g_free);
-	g_slist_free_full(dec->tags, g_free);
 	g_free(dec->license);
 	g_free(dec->desc);
 	g_free(dec->longname);
@@ -227,13 +224,7 @@ static int get_channels(const struct srd_decoder *d, const char *attr,
 				"a list of dict elements.", d->name, attr);
 			goto err_out;
 		}
-		pdch = g_try_malloc0(sizeof(struct srd_channel));
-		if (pdch == NULL){
-			srd_err("%s,ERROR:failed to alloc memory.", __func__);
-			goto err_out;
-		}
-		memset(pdch, 0, sizeof(struct srd_channel));
-
+		pdch = g_malloc0(sizeof(struct srd_channel));
 		/* Add to list right away so it doesn't get lost. */
 		pdchl = g_slist_prepend(pdchl, pdch);
 
@@ -244,11 +235,12 @@ static int get_channels(const struct srd_decoder *d, const char *attr,
 		if (py_dictitem_as_str(py_entry, "desc", &pdch->desc) != SRD_OK)
 			goto err_out;
 
-		py_dictitem_as_str(py_entry, "idn", &pdch->idn);
-
-		pdch->type = py_dictitem_to_int(py_entry, "type");
-		if (pdch->type < 0)
-			pdch->type = SRD_CHANNEL_COMMON;
+        pdch->type = SRD_CHANNEL_COMMON;
+        PyObject *extra = PyDict_GetItemString(py_entry, "type");
+        if (extra && PyLong_Check(extra)) pdch->type = PyLong_AsLong(extra);
+        if (PyErr_Occurred()) goto err_out;
+        if (PyDict_GetItemString(py_entry, "idn") &&
+            py_dictitem_as_str(py_entry, "idn", &pdch->idn) != SRD_OK) goto err_out;
 		pdch->order = offset + i;
 	}
 
@@ -260,7 +252,7 @@ static int get_channels(const struct srd_decoder *d, const char *attr,
 	return SRD_OK;
 
 except_out:
-    srd_exception_catch(NULL, "Failed to get %s list of %s decoder",
+	srd_exception_catch("Failed to get %s list of %s decoder",
 			attr, d->name);
 
 err_out:
@@ -312,15 +304,11 @@ static int get_options(struct srd_decoder *d)
 			goto err_out;
 		}
 
-		o = g_try_malloc0(sizeof(struct srd_decoder_option));
-		if (o == NULL){
-			srd_err("%s,ERROR:failed to alloc memory.", __func__);
-			goto err_out;
-		}
-		memset(o, 0, sizeof(struct srd_decoder_option));
-
+		o = g_malloc0(sizeof(struct srd_decoder_option));
 		/* Add to list right away so it doesn't get lost. */
 		options = g_slist_prepend(options, o);
+        if (PyDict_GetItemString(py_opt, "idn") &&
+            py_dictitem_as_str(py_opt, "idn", &o->idn) != SRD_OK) goto err_out;
 
 		py_str = PyDict_GetItemString(py_opt, "id");
 		if (!py_str) {
@@ -335,11 +323,6 @@ static int get_options(struct srd_decoder *d)
 		if (py_str) {
 			if (py_str_as_str(py_str, &o->desc) != SRD_OK)
 				goto err_out;
-		}
-
-		py_str = PyDict_GetItemString(py_opt, "idn");
-		if (py_str){
-			py_str_as_str(py_str, &o->idn);
 		}
 
 		py_default = PyDict_GetItemString(py_opt, "default");
@@ -397,7 +380,7 @@ static int get_options(struct srd_decoder *d)
 	return SRD_OK;
 
 except_out:
-    srd_exception_catch(NULL, "Failed to get %s decoder options", d->name);
+	srd_exception_catch("Failed to get %s decoder options", d->name);
 
 err_out:
 	g_slist_free_full(options, &decoder_option_free);
@@ -414,11 +397,7 @@ static int get_annotations(struct srd_decoder *dec)
 	GSList *annotations;
 	char **annpair;
 	ssize_t i;
-	int ann_type = 7;
-	unsigned int j;
 	PyGILState_STATE gstate;
-
-	assert(dec);
 
 	gstate = PyGILState_Ensure();
 
@@ -439,31 +418,38 @@ static int get_annotations(struct srd_decoder *dec)
 		goto err_out;
 	}
 
+    int next_type = 7;
 	for (i = 0; i < PyTuple_Size(py_annlist); i++) {
 		py_ann = PyTuple_GetItem(py_annlist, i);
 		if (!py_ann)
 			goto except_out;
 
-		if (!PyTuple_Check(py_ann) || (PyTuple_Size(py_ann) != 3 && PyTuple_Size(py_ann) != 2)) {
+		if (!PyTuple_Check(py_ann) || (PyTuple_Size(py_ann) != 2 && PyTuple_Size(py_ann) != 3)) {
 			srd_err("Protocol decoder %s annotation %zd should "
-				"be a tuple with two or three elements.",
+				"be a tuple with two elements.",
 				dec->name, i + 1);
 			goto err_out;
 		}
-		if (py_strseq_to_char(py_ann, &annpair) != SRD_OK)
-			goto err_out;
-
-		annotations = g_slist_prepend(annotations, annpair);
-
-		if (PyTuple_Size(py_ann) == 3) {
-			ann_type = 0;
-            for (j = 0; j < strlen(annpair[0]); j++)
-                ann_type = ann_type * 10 + (annpair[0][j] - '0');
-            dec->ann_types = g_slist_append(dec->ann_types, GINT_TO_POINTER(ann_type));
-		} else if (PyTuple_Size(py_ann) == 2) {
-			dec->ann_types = g_slist_append(dec->ann_types, GINT_TO_POINTER(ann_type));
-			ann_type++;
-		}
+        int type = next_type++;
+        int first = 0;
+        if (PyTuple_Size(py_ann) == 3) {
+            char *value = NULL, *end = NULL;
+            if (py_str_as_str(PyTuple_GetItem(py_ann, 0), &value) != SRD_OK) goto err_out;
+            gint64 parsed = g_ascii_strtoll(value, &end, 10);
+            gboolean valid = *value && !*end && parsed >= 0 && parsed <= G_MAXINT;
+            g_free(value);
+            if (!valid) goto err_out;
+            type = parsed;
+            next_type = type;
+            first = 1;
+        }
+        PyObject *pair = PyTuple_GetSlice(py_ann, first, first + 2);
+        if (!pair) goto err_out;
+        int result = py_strseq_to_char(pair, &annpair);
+        Py_DECREF(pair);
+        if (result != SRD_OK) goto err_out;
+        dec->ann_types = g_slist_append(dec->ann_types, GINT_TO_POINTER(type));
+		annotations = g_slist_append(annotations, annpair);
 	}
 	dec->annotations = annotations;
 	Py_DECREF(py_annlist);
@@ -472,7 +458,7 @@ static int get_annotations(struct srd_decoder *dec)
 	return SRD_OK;
 
 except_out:
-    srd_exception_catch(NULL, "Failed to get %s decoder annotations", dec->name);
+	srd_exception_catch("Failed to get %s decoder annotations", dec->name);
 
 err_out:
 	g_slist_free_full(annotations, (GDestroyNotify)&g_strfreev);
@@ -522,13 +508,7 @@ static int get_annotation_rows(struct srd_decoder *dec)
 				dec->name);
 			goto err_out;
 		}
-		ann_row = g_try_malloc0(sizeof(struct srd_decoder_annotation_row));
-		if (ann_row == NULL){
-			srd_err("%s,ERROR:failed to alloc memory.", __func__);
-			goto err_out;
-		}
-		memset(ann_row, 0, sizeof(struct srd_decoder_annotation_row));
-
+		ann_row = g_malloc0(sizeof(struct srd_decoder_annotation_row));
 		/* Add to list right away so it doesn't get lost. */
 		annotation_rows = g_slist_prepend(annotation_rows, ann_row);
 
@@ -581,7 +561,7 @@ static int get_annotation_rows(struct srd_decoder *dec)
 	return SRD_OK;
 
 except_out:
-    srd_exception_catch(NULL, "Failed to get %s decoder annotation rows",
+	srd_exception_catch("Failed to get %s decoder annotation rows",
 			dec->name);
 
 err_out:
@@ -644,7 +624,7 @@ static int get_binary_classes(struct srd_decoder *dec)
 	return SRD_OK;
 
 except_out:
-    srd_exception_catch(NULL, "Failed to get %s decoder binary classes",
+	srd_exception_catch("Failed to get %s decoder binary classes",
 			dec->name);
 
 err_out:
@@ -667,7 +647,7 @@ static int check_method(PyObject *py_dec, const char *mod_name,
 
 	py_method = PyObject_GetAttrString(py_dec, method_name);
 	if (!py_method) {
-        srd_exception_catch(NULL, "Protocol decoder %s Decoder class "
+		srd_exception_catch("Protocol decoder %s Decoder class "
 				"has no %s() method", mod_name, method_name);
 		PyGILState_Release(gstate);
 		return SRD_ERR_PYTHON;
@@ -732,9 +712,9 @@ SRD_API int srd_decoder_load(const char *module_name)
 	struct srd_decoder *d;
 	long apiver;
 	int is_subclass;
-	const char *fail_txt = NULL;
+	const char *fail_txt;
 	PyGILState_STATE gstate;
-  
+
 	if (!srd_check_init())
 		return SRD_ERR;
 
@@ -749,16 +729,9 @@ SRD_API int srd_decoder_load(const char *module_name)
 		return SRD_OK;
 	}
 
-	d = g_try_malloc0(sizeof(struct srd_decoder));
-	if (d == NULL){
-		srd_err("%s,ERROR:failed to alloc memory.", __func__);
-		goto err_out;
-	}
-	memset(d, 0, sizeof(struct srd_decoder));
-
+	d = g_malloc0(sizeof(struct srd_decoder));
 	fail_txt = NULL;
 
-	//Load module from python script file,module_name is a sub directory
 	d->py_mod = py_import_by_name(module_name);
 	if (!d->py_mod) {
 		fail_txt = "import by name failed";
@@ -771,19 +744,13 @@ SRD_API int srd_decoder_load(const char *module_name)
 		goto err_out;
 	}
 
-	/* 
-		Get the 'Decoder' class as Python object. 
-		Here, Decoder is python class type
-	*/
+	/* Get the 'Decoder' class as Python object. */
 	d->py_dec = PyObject_GetAttrString(d->py_mod, "Decoder");
 	if (!d->py_dec) {
 		fail_txt = "no 'Decoder' attribute in imported module";
 		goto except_out;
 	}
 
-	/*
-	   Here, Decoder is c class type
-	*/
 	py_basedec = PyObject_GetAttrString(mod_sigrokdecode, "Decoder");
 	if (!py_basedec) {
 		fail_txt = "no 'Decoder' attribute in sigrokdecode(3)";
@@ -806,7 +773,7 @@ SRD_API int srd_decoder_load(const char *module_name)
 	 */
 	apiver = srd_decoder_apiver(d);
 	if (apiver != 3) {
-        srd_exception_catch(NULL, "Only PD API version 3 is supported, "
+		srd_exception_catch("Only PD API version 3 is supported, "
 			"decoder %s has version %ld", module_name, apiver);
 		fail_txt = "API version mismatch";
 		goto err_out;
@@ -834,7 +801,7 @@ SRD_API int srd_decoder_load(const char *module_name)
 		fail_txt = "no 'id' attribute";
 		goto err_out;
 	}
- 
+
 	if (py_attr_as_str(d->py_dec, "name", &(d->name)) != SRD_OK) {
 		fail_txt = "no 'name' attribute";
 		goto err_out;
@@ -865,11 +832,6 @@ SRD_API int srd_decoder_load(const char *module_name)
 		goto err_out;
 	}
 
-	if (py_attr_as_strlist(d->py_dec, "tags", &(d->tags)) != SRD_OK) {
-		fail_txt = "missing or malformed 'tags' attribute";
-		goto err_out;
-	}
-
 	/* All options and their default values. */
 	if (get_options(d) != SRD_OK) {
 		fail_txt = "cannot get options";
@@ -889,6 +851,8 @@ SRD_API int srd_decoder_load(const char *module_name)
 		goto err_out;
 	}
 
+    if (PyObject_HasAttrString(d->py_dec, "tags") &&
+        py_attr_as_strlist(d->py_dec, "tags", &d->tags) != SRD_OK) goto err_out;
 	if (get_annotations(d) != SRD_OK) {
 		fail_txt = "cannot get annotations";
 		goto err_out;
@@ -914,16 +878,14 @@ SRD_API int srd_decoder_load(const char *module_name)
 except_out:
 	/* Don't show a message for the "common" directory, it's not a PD. */
 	if (strcmp(module_name, "common")) {
-        srd_exception_catch(NULL, "Failed to load decoder %s: %s",
+		srd_exception_catch("Failed to load decoder %s: %s",
 				    module_name, fail_txt);
 	}
 	fail_txt = NULL;
 
 err_out:
-	if (fail_txt != NULL){
+	if (fail_txt)
 		srd_err("Failed to load decoder %s: %s", module_name, fail_txt);
-	}
-
 	decoder_free(d);
 	PyGILState_Release(gstate);
 
@@ -933,7 +895,7 @@ err_out:
 /**
  * Return a protocol decoder's docstring.
  *
- * @param dec The loaded protocol decoder.
+ * @param dec The loaded protocol decoder. Must not be NULL.
  *
  * @return A newly allocated buffer containing the protocol decoder's
  *         documentation. The caller is responsible for free'ing the buffer.
@@ -949,7 +911,7 @@ SRD_API char *srd_decoder_doc_get(const struct srd_decoder *dec)
 	if (!srd_check_init())
 		return NULL;
 
-	if (!dec)
+	if (!dec || !dec->py_mod)
 		return NULL;
 
 	gstate = PyGILState_Ensure();
@@ -958,7 +920,7 @@ SRD_API char *srd_decoder_doc_get(const struct srd_decoder *dec)
 		goto err;
 
 	if (!(py_str = PyObject_GetAttrString(dec->py_mod, "__doc__"))) {
-        srd_exception_catch(NULL, "Failed to get docstring");
+		srd_exception_catch("Failed to get docstring");
 		goto err;
 	}
 
@@ -1105,8 +1067,6 @@ static void srd_decoder_load_all_path(char *path)
 	GDir *dir;
 	const gchar *direntry;
 
-	assert(path);
-
 	if (!(dir = g_dir_open(path, 0, NULL))) {
 		/* Not really fatal. Try zipimport method too. */
 		srd_decoder_load_all_zip_path(path);
@@ -1139,9 +1099,8 @@ SRD_API int srd_decoder_load_all(void)
 	if (!srd_check_init())
 		return SRD_ERR;
 
-    for (l = searchpaths; l; l = l->next){
+	for (l = searchpaths; l; l = l->next)
 		srd_decoder_load_all_path(l->data);
-    }
 
 	return SRD_OK;
 }

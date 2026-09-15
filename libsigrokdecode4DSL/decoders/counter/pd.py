@@ -18,6 +18,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 PIN_DATA, PIN_RESET = range(2)
 ROW_EDGE, ROW_WORD, ROW_RESET = range(3)
@@ -106,7 +107,7 @@ class Decoder(srd.Decoder):
             self.wait(condition)
             now = self.samplenum
 
-            if have_reset and (self.matched & (0b1 <<cond_reset)):
+            if have_reset and (match_mask(self.matched) & (0b1 <<cond_reset)):
                 edge_count = int(self.options['edge_off'])
                 edge_start = now
                 word_count = int(self.options['word_off'])

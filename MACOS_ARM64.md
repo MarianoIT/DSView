@@ -9,7 +9,7 @@ dependency is also `arm64`. Do not build or package under Rosetta.
 
 - The application already has Darwin-specific UI and resource paths.
 - `CMakeLists.txt` builds upstream libsigrok 0.5.2 and libzip 1.11.4 from
-  verified source archives, plus the ported DSL protocol, custom decoder and
+  verified source archives, plus the ported DSL protocol, libsigrokdecode 0.5.3 engine and
   minizip sources. These are not Homebrew sigrok packages.
 - External dependencies are GLib, Python development headers, FFTW, libusb,
   zlib, Qt, Boost, threads, and pkg-config.
@@ -45,7 +45,7 @@ dependency is also `arm64`. Do not build or package under Rosetta.
 Homebrew supplies the current compatible releases of CMake, Ninja, GLib,
 libusb, zlib, Boost, FFTW, Python, Qt, and pkgconf. The minimum supported
 versions in `INSTALL` were raised to a maintained baseline. The controller now runs on libsigrok 0.5.2 through an ABI-isolated bridge.
-The custom decoder remains pinned. See `SIGROK_MIGRATION.md` for the port's
+The decoder engine is ported to official 0.5.3 with DSView metadata extensions. See `SIGROK_MIGRATION.md` for the port's
 architecture, calibration storage limitation, tests and compatibility boundary.
 
 ## Acceptance checks

@@ -2,8 +2,8 @@
  * This file is part of the libsigrokdecode project.
  *
  * Copyright (C) 2010 Uwe Hermann <uwe@hermann-uwe.de>
- * Copyright (C) 2012 Bert Vermeulen <bert@biot.com>
  * Copyright (C) 2016 DreamSourceLab <support@dreamsourcelab.com>
+ * Copyright (C) 2012 Bert Vermeulen <bert@biot.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,24 +26,13 @@
 #include <glib.h>
 #include <log/xlog.h>
 
-#define DECODE_NUM_HEX_MAX_LEN		 256
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-struct srd_session {
-    int session_id;
-
-    /* 
-		List of decoder instances.
-		srd_decoder_inst* type
-	*/
-    GSList *di_list;
-
-    /* List of frontend callbacks to receive decoder output. */
-    GSList *callbacks;
-};
+struct srd_session;
+#define DECODE_NUM_HEX_MAX_LEN 256
+enum srd_channel_type { SRD_CHANNEL_COMMON = -1, SRD_CHANNEL_SCLK, SRD_CHANNEL_SDATA, SRD_CHANNEL_ADATA };
 
 /**
  * @file
@@ -94,6 +83,16 @@ enum srd_error_code {
 	 */
 };
 
+/* libsigrokdecode loglevels. */
+enum srd_loglevel {
+	SRD_LOG_NONE = 0, /**< Output no messages at all. */
+	SRD_LOG_ERR  = 1, /**< Output error messages. */
+	SRD_LOG_WARN = 2, /**< Output warnings. */
+	SRD_LOG_INFO = 3, /**< Output informational messages. */
+	SRD_LOG_DBG  = 4, /**< Output debug messages. */
+	SRD_LOG_SPEW = 5, /**< Output very noisy debug messages. */
+};
+
 /*
  * Use SRD_API to mark public API symbols, and SRD_PRIV for private symbols.
  *
@@ -141,15 +140,6 @@ enum srd_configkey {
 	SRD_CONF_SAMPLERATE = 10000,
 };
 
-enum srd_channel_type {
-    SRD_CHANNEL_COMMON = -1,
-    SRD_CHANNEL_SCLK,
-    SRD_CHANNEL_SDATA,
-    SRD_CHANNEL_ADATA,
-};
-
-extern char decoders_path[256];
-
 struct srd_decoder {
 	/** The decoder ID. Must be non-NULL and unique for all decoders. */
 	char *id;
@@ -174,9 +164,7 @@ struct srd_decoder {
 
 	/** List of possible decoder output IDs. */
 	GSList *outputs;
-
-	/** List of tags associated with this decoder. */
-	GSList *tags;
+    GSList *tags;
 
 	/** List of channels required by this decoder. */
 	GSList *channels;
@@ -185,8 +173,8 @@ struct srd_decoder {
 	GSList *opt_channels;
 
 	/**
-	 * List of NULL-terminated char[], containing descriptions of the
-	 * supported annotation output.
+	 * List of annotation classes. Each list item is a GSList itself, with
+	 * two NUL-terminated strings: name and description.
 	 */
 	GSList *annotations;
     GSList *ann_types;
@@ -198,8 +186,8 @@ struct srd_decoder {
 	GSList *annotation_rows;
 
 	/**
-	 * List of NULL-terminated char[], containing descriptions of the
-	 * supported binary output.
+	 * List of binary classes. Each list item is a GSList itself, with
+	 * two NUL-terminated strings: name and description.
 	 */
 	GSList *binary;
 
@@ -232,15 +220,13 @@ struct srd_channel {
 	char *desc;
 	/** The index of the channel, i.e. its order in the list of channels. */
 	int order;
-    /** The type of the channel, such us: sclk/sdata/.../others */
     int type;
-	/** The language text soruce id. */
-	char *idn;
+    char *idn;
 };
 
 struct srd_decoder_option {
 	char *id;
-	char *idn;
+    char *idn;
 	char *desc;
 	GVariant *def;
 	GSList *values;
@@ -256,20 +242,19 @@ struct srd_decoder_inst {
 	struct srd_decoder *decoder;
 	struct srd_session *sess;
 	void *py_inst;
-    void *py_pinvalues;  /* is a python duple type, like (1,0,255,255)*/
 	char *inst_id;
-	GSList *pd_output;   /* srd_pd_output* type */
+	GSList *pd_output;
 	int dec_num_channels;
 	int *dec_channelmap;
+	int data_unitsize;
+	uint8_t *channel_samples;
 	GSList *next_di;
 
-	/** List of conditions a PD wants to wait for. 
-	 *  Type is srd_term* of GSList*
-	*/
+	/** List of conditions a PD wants to wait for. */
 	GSList *condition_list;
 
 	/** Array of booleans denoting which conditions matched. */
-    uint64_t match_array;
+	GArray *match_array;
 
 	/** Absolute start sample number. */
 	uint64_t abs_start_samplenum;
@@ -278,10 +263,7 @@ struct srd_decoder_inst {
 	uint64_t abs_end_samplenum;
 
 	/** Pointer to the buffer/chunk of input samples. */
-    const uint8_t **inbuf;
-
-    /** Pointer to the buffer/chunk of input const blocks. */
-    const uint8_t *inbuf_const;
+	const uint8_t *inbuf;
 
 	/** Length (in bytes) of the input sample buffer. */
 	uint64_t inbuflen;
@@ -289,12 +271,7 @@ struct srd_decoder_inst {
 	/** Absolute current samplenumber. */
 	uint64_t abs_cur_samplenum;
 
-    /** Absolute current sample matched conditions. */
-    gboolean abs_cur_matched;
-
-	/** Array of "old" (previous sample) pin values.
-	 *  Type of uint8_t
-	 */
+	/** Array of "old" (previous sample) pin values. */
 	GArray *old_pins_array;
 
 	/** Handle for this PD stack's worker thread. */
@@ -309,23 +286,12 @@ struct srd_decoder_inst {
 	/** Requests termination of wait() and decode(). */
 	gboolean want_wait_terminate;
 
-    /** First entry of wait(). */
-    gboolean first_pos;
-
-    /** skip zero flag. */
-    gboolean skip_zero;
-
 	/** Indicates the current state of the decoder stack. */
 	int decoder_state;
 
 	GCond got_new_samples_cond;
 	GCond handled_all_samples_cond;
 	GMutex data_mutex;
-
-	char *python_proc_error;
-
-	/** the task normal ends flag */
-	int  is_task_stop_signal;
 };
 
 struct srd_pd_output {
@@ -343,17 +309,16 @@ struct srd_proto_data {
 	uint64_t start_sample;
 	uint64_t end_sample;
 	struct srd_pd_output *pdo;
-	void *data; 
+	void *data;
 };
 struct srd_proto_data_annotation {
-	int ann_class;
-    int ann_type; 
-	char str_number_hex[DECODE_NUM_HEX_MAX_LEN]; //numerical value hex format string
-	long long numberic_value;
-	char **ann_text; //text string lines
+	int ann_class; /* Index into "struct srd_decoder"->annotations. */
+    int ann_type;
+    char str_number_hex[DECODE_NUM_HEX_MAX_LEN];
+	char **ann_text;
 };
 struct srd_proto_data_binary {
-	int bin_class;
+	int bin_class; /* Index into "struct srd_decoder"->binary. */
 	uint64_t size;
 	const unsigned char *data;
 };
@@ -371,22 +336,22 @@ struct srd_pd_callback {
 SRD_API int srd_init(const char *path);
 SRD_API int srd_exit(void);
 SRD_API GSList *srd_searchpaths_get(void);
-SRD_API void srd_set_python_home(const wchar_t *path);
 
 /* session.c */
 SRD_API int srd_session_new(struct srd_session **sess);
-SRD_API int srd_session_start(struct srd_session *sess, char **error);
+SRD_API int srd_session_start(struct srd_session *sess);
 SRD_API int srd_session_metadata_set(struct srd_session *sess, int key,
 		GVariant *data);
 SRD_API int srd_session_send(struct srd_session *sess,
-        uint64_t abs_start_samplenum, uint64_t abs_end_samplenum,
-        const uint8_t **inbuf, const uint8_t *inbuf_const, uint64_t inbuflen, char **error);
+		uint64_t abs_start_samplenum, uint64_t abs_end_samplenum,
+		const uint8_t *inbuf, uint64_t inbuflen, uint64_t unitsize);
 SRD_API int srd_session_terminate_reset(struct srd_session *sess);
 SRD_API int srd_session_destroy(struct srd_session *sess);
 SRD_API int srd_pd_output_callback_add(struct srd_session *sess,
 		int output_type, srd_pd_output_callback cb, void *cb_data);
 
-SRD_API int srd_session_end(struct srd_session *sess, char **error);
+/* DSView completion hook; sample decoding still uses the upstream API. */
+SRD_API int ds_srd_session_end(struct srd_session *sess, char **error);
 
 /* decoder.c */
 SRD_API const GSList *srd_decoder_list(void);
@@ -411,16 +376,16 @@ SRD_API struct srd_decoder_inst *srd_inst_find_by_id(struct srd_session *sess,
 SRD_API int srd_inst_initial_pins_set_all(struct srd_decoder_inst *di,
 		GArray *initial_pins);
 
-/* log.c */
-/**
- * Use a shared context, and drop the private log context
- */
-SRD_API void srd_log_set_context(xlog_context *ctx);
+SRD_API void ds_srd_log_set_context(xlog_context *context);
 
-/**
- * Set the private log context level
- */
-SRD_API void srd_log_level(int level);
+/* log.c */
+typedef int (*srd_log_callback)(void *cb_data, int loglevel,
+				  const char *format, va_list args);
+SRD_API int srd_log_loglevel_set(int loglevel);
+SRD_API int srd_log_loglevel_get(void);
+SRD_API int srd_log_callback_get(srd_log_callback *cb, void **cb_data);
+SRD_API int srd_log_callback_set(srd_log_callback cb, void *cb_data);
+SRD_API int srd_log_callback_set_default(void);
 
 /* error.c */
 SRD_API const char *srd_strerror(int error_code);
@@ -435,6 +400,8 @@ SRD_API int srd_lib_version_current_get(void);
 SRD_API int srd_lib_version_revision_get(void);
 SRD_API int srd_lib_version_age_get(void);
 SRD_API const char *srd_lib_version_string_get(void);
+SRD_API GSList *srd_buildinfo_libs_get(void);
+SRD_API char *srd_buildinfo_host_get(void);
 
 #include "version.h"
 

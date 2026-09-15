@@ -1,4 +1,4 @@
-# DSL controller on libsigrok 0.5.2
+# Sigrok controller and decoder migration
 
 The DSL controller now runs on upstream libsigrok's device and session lifecycle.
 The old `libsigrok4DSL/session.c` polling loop is removed. Version 0.5.2 is the
@@ -23,9 +23,36 @@ it is not the development branch. Upgrading alone does not establish memory safe
 - `CMake/PatchSigrok.cmake` replaces upstream linker-section enumeration with
   bounded arrays for the two enabled stock drivers. This avoids reading ASan
   redzones between separately allocated globals; sanitizers are not suppressed.
-- The custom `libsigrokdecode4DSL` decoder API remains in use. Updating it to
-  official libsigrokdecode is still separate work; this controller port does
-  **not** complete the broader request to update every dependency.
+- The decoder engine is now based on official libsigrokdecode 0.5.3. The
+  `libsigrokdecode4DSL` directory remains for existing install/resource paths;
+  its C engine was imported from the verified official archive. The previous
+  `0.6.0-git-3914467` label identified the DSView fork, not an official release.
+  This pins the latest published release, not the upstream development branch.
+
+## Decoder integration
+
+`dsview_decode` builds the imported engine as a static library. DSView now sends
+interleaved samples through the official `srd_session_send` ABI and starts opaque
+sessions with `srd_session_start(session)`. `sigrok/decode-input.h` converts channel
+bit planes, including non-byte offsets, constant channels and physical mappings.
+Chunk boundaries are exclusive and clamped to the snapshot block and requested
+range. The frontend no longer accesses the private session instance list.
+
+Small DSView extensions retain numeric annotations, channel/option descriptions,
+tags, annotation types, log integration and optional `end()` hooks. Parent hooks
+flush before stacked children and share the capture endpoint. The 153 existing
+DSView Python decoders are retained; scripts that used an integer `matched` mask
+now adapt the official tuple via `common.sigrok_compat.match_mask`. This is not
+an import of the entire upstream decoder catalog.
+
+Memory corrections include dynamic annotation text vectors, bounded numeric
+formatting, removal of an extra Python instance reference, recursive destruction
+of stacked instances, and cleanup of synchronization resources. Native 0.5.3
+also leaked match arrays across input chunks and lists of channel-map keys;
+these are corrected without sanitizer suppressions. Python 3.14 uses its native
+thread initialization rather than the removed `PyEval_InitThreads` call.
+Decoder region controls are clipped before drawing, preventing an out-of-range
+floating-point-to-integer conversion when a capture endpoint is offscreen.
 
 ## Memory and lifecycle corrections
 
@@ -122,3 +149,45 @@ The macOS leak tool reported restricted inspection of writable contents because
 of process debugging permissions, but completed its allocation/stack analysis.
 No exclusion or sanitizer suppression was used. Detailed local execution logs
 are in the ignored `build-sigrok-migration/artifacts/` directory.
+
+## Decoder validation (2026-09-15)
+
+Build and run without an attached instrument:
+
+```sh
+cmake --build build-port -j6
+ctest --test-dir build-port --output-on-failure -LE hardware
+cmake --build build-port-asan -j6
+ASAN_OPTIONS=halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+  ctest --test-dir build-port-asan --output-on-failure -LE hardware
+MallocStackLogging=1 leaks --atExit -- ./build.dir/dsview-decode-test
+```
+
+The protocol test loads all 153 production decoders, exercises 20 Clock sessions,
+SPI byte A5 on remapped physical channel 9, malformed buffer rejection, and
+bit-plane conversion with offsets and constant/missing channels. Test-only Python
+fixtures exercise 20 stacked sessions, completion ordering/timestamps, 12 annotation
+texts, signed numeric conversion, and propagation of intentional Python errors.
+Loading a decoder is not a functional test of every supported protocol.
+
+Physical decoder validation is available as `dsview-decode-test --hardware`
+(or CTest `dsview-decode-hardware` with `DSVIEW_HARDWARE_TESTS=ON`). It captures
+10,000 real DSO samples, thresholds them, decodes Clock in 17-sample chunks, and
+compares annotation counts to independently counted edges. It requires a periodic
+signal and rejects Demo. During this migration the instrument was not detected;
+this new physical decoding check remains pending. The earlier controller hardware
+results above do not establish physical validation of the new decoder engine.
+
+Recorded decoder results:
+
+| Check | Result |
+| --- | --- |
+| Release build and `ctest --test-dir build-port --output-on-failure -LE hardware` | Build succeeded; 5/5 passed |
+| ASan/UBSan build and equivalent CTest command above | Build succeeded; 5/5 passed, no sanitizer report |
+| Offscreen ASan/UBSan GUI startup, 8 seconds then SIGTERM | Remained running, no sanitizer report |
+| Initial macOS `leaks` run | Identified 694 allocations / 27,408 bytes rooted in match arrays and channel-map key lists; both causes corrected |
+| Repeated `leaks --atExit -- ./build.dir/dsview-decode-test` | macOS MallocStackLogging aborts in `uniquing_table_node_release_internal`; no final leak count available |
+| `dsview-decode-test --hardware` and `dsview-cli devices list` | Physical instrument unavailable; enumeration contains only Demo |
+
+The migration builds and passes software regression checks. Physical acceptance
+and a final independent leak count are still outstanding. No rollback was made.

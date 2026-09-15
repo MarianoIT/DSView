@@ -22,13 +22,11 @@
 #include "libsigrokdecode-internal.h" /* First, so we avoid a _POSIX_C_SOURCE warning. */
 #include "libsigrokdecode.h"
 #include <glib.h>
-#include "log.h"
 
 /** @cond PRIVATE */
 
 /* Python module search paths */
 SRD_PRIV GSList *searchpaths = NULL;
-static wchar_t *python_home = NULL;
 
 /* session.c */
 extern SRD_PRIV GSList *sessions;
@@ -114,6 +112,38 @@ static int searchpath_add_xdg_dir(const char *datadir)
 	return ret;
 }
 
+static void print_versions(void)
+{
+	GString *s;
+	GSList *l, *l_orig, *m;
+	char *str;
+	const char *lib, *version;
+
+	srd_dbg("libsigrokdecode %s/%s (rt: %s/%s).",
+		SRD_PACKAGE_VERSION_STRING, SRD_LIB_VERSION_STRING,
+		srd_package_version_string_get(), srd_lib_version_string_get());
+
+	s = g_string_sized_new(200);
+	g_string_append(s, "Libs: ");
+	l_orig = srd_buildinfo_libs_get();
+	for (l = l_orig; l; l = l->next) {
+		m = l->data;
+		lib = m->data;
+		version = m->next->data;
+		g_string_append_printf(s, "%s %s, ", lib, version);
+		g_slist_free_full(m, g_free);
+	}
+	g_slist_free(l_orig);
+	s->str[s->len - 2] = '.';
+	s->str[s->len - 1] = '\0';
+	srd_dbg("%s", s->str);
+	g_string_free(s, TRUE);
+
+	str = srd_buildinfo_host_get();
+	srd_dbg("Host: %s.", str);
+	g_free(str);
+}
+
 static int print_searchpaths(void)
 {
 	PyObject *py_paths, *py_path, *py_bytes;
@@ -189,16 +219,16 @@ err:
 SRD_API int srd_init(const char *path)
 {
 	const char *const *sys_datadirs;
+	const char *env_path;
 	size_t i;
 	int ret;
-	const char *env_path;
 
-	srd_log_init(); //init log
- 	
 	if (max_session_id != -1) {
 		srd_err("libsigrokdecode is already initialized.");
 		return SRD_ERR;
 	}
+
+	print_versions();
 
 	srd_dbg("Initializing libsigrokdecode.");
 
@@ -206,15 +236,30 @@ SRD_API int srd_init(const char *path)
 	PyImport_AppendInittab("sigrokdecode", PyInit_sigrokdecode);
 
 	/* Initialize the Python interpreter. */
-    Py_InitializeEx(0);
+	Py_InitializeEx(0);
 
+	/* Locations relative to the XDG system data directories. */
+	sys_datadirs = g_get_system_data_dirs();
+	for (i = g_strv_length((char **)sys_datadirs); i > 0; i--) {
+		ret = searchpath_add_xdg_dir(sys_datadirs[i - 1]);
+		if (ret != SRD_OK) {
+			Py_Finalize();
+			return ret;
+		}
+	}
 #ifdef DECODERS_DIR
 	/* Hardcoded decoders install location, if defined. */
 	if ((ret = srd_decoder_searchpath_add(DECODERS_DIR)) != SRD_OK) {
 		Py_Finalize();
 		return ret;
 	}
-#endif 
+#endif
+	/* Location relative to the XDG user data directory. */
+	ret = searchpath_add_xdg_dir(g_get_user_data_dir());
+	if (ret != SRD_OK) {
+		Py_Finalize();
+		return ret;
+	}
 
 	/* Path specified by the user. */
 	if (path) {
@@ -223,45 +268,22 @@ SRD_API int srd_init(const char *path)
 			return ret;
 		}
 	}
-	else{ 
-		/* Locations relative to the XDG system data directories. */
-		sys_datadirs = g_get_system_data_dirs();
-		for (i = g_strv_length((char **)sys_datadirs); i > 0; i--)
-		{
-			ret = searchpath_add_xdg_dir(sys_datadirs[i - 1]);
-			if (ret != SRD_OK)
-			{
-				Py_Finalize();
-				return ret;
-			}
-		}
 
-		/* Location relative to the XDG user data directory. */
-		ret = searchpath_add_xdg_dir(g_get_user_data_dir());
-		if (ret != SRD_OK)
-		{
+	/* Environment variable overrides everything, for debugging. */
+	if ((env_path = g_getenv("SIGROKDECODE_DIR"))) {
+		if ((ret = srd_decoder_searchpath_add(env_path)) != SRD_OK) {
 			Py_Finalize();
 			return ret;
 		}
-
-		/* Environment variable overrides everything, for debugging. */
-		if ((env_path = g_getenv("SIGROKDECODE_DIR")))
-		{
-			if ((ret = srd_decoder_searchpath_add(env_path)) != SRD_OK)
-			{
-				Py_Finalize();
-				return ret;
-			}
-		}
 	}
 
-	/* Python 3.9+ initializes the GIL during interpreter startup. */
+	/* Initialize the Python GIL (this also happens to acquire it). */
 #if PY_VERSION_HEX < 0x03090000
 	PyEval_InitThreads();
 #endif
 
 	/* Release the GIL (ignore return value, we don't need it here). */
-	PyEval_SaveThread();
+	(void)PyEval_SaveThread();
 
 	max_session_id = 0;
 
@@ -316,8 +338,6 @@ SRD_API int srd_exit(void)
 
 	max_session_id = -1;
 
-	srd_log_uninit(); //uninit log
-
 	return SRD_OK;
 }
 
@@ -337,29 +357,27 @@ SRD_API int srd_exit(void)
  * @return SRD_OK upon success, a (negative) error code otherwise.
  *
  * @private
- *
- * @since 0.1.0
  */
 SRD_PRIV int srd_decoder_searchpath_add(const char *path)
 {
+	PyObject *py_cur_path, *py_item;
 	PyGILState_STATE gstate;
 
 	srd_dbg("Adding '%s' to module path.", path);
 
 	gstate = PyGILState_Ensure();
-	
-	PyObject *py_cur_path, *py_item;
+
 	py_cur_path = PySys_GetObject("path");
 	if (!py_cur_path)
 		goto err;
 
 	py_item = PyUnicode_FromString(path);
 	if (!py_item) {
-        srd_exception_catch(NULL, "Failed to create Unicode object");
+		srd_exception_catch("Failed to create Unicode object");
 		goto err;
 	}
 	if (PyList_Insert(py_cur_path, 0, py_item) < 0) {
-        srd_exception_catch(NULL, "Failed to insert path element");
+		srd_exception_catch("Failed to insert path element");
 		Py_DECREF(py_item);
 		goto err;
 	}
@@ -367,7 +385,6 @@ SRD_PRIV int srd_decoder_searchpath_add(const char *path)
 
 	PyGILState_Release(gstate);
 
-	//append the directory to search list
 	searchpaths = g_slist_prepend(searchpaths, g_strdup(path));
 
 	return SRD_OK;
@@ -393,22 +410,6 @@ SRD_API GSList *srd_searchpaths_get(void)
 		paths = g_slist_append(paths, g_strdup(l->data));
 
 	return paths;
-}
-
-//set python home directory
-SRD_API void srd_set_python_home(const wchar_t *path)
-{
-	g_free(python_home);
-	python_home = NULL;
-	if (path) {
-		const size_t length = wcslen(path) + 1;
-		python_home = g_malloc(length * sizeof(*python_home));
-		if (python_home)
-			memcpy(python_home, path, length * sizeof(*python_home));
-	}
-#if PY_VERSION_HEX < 0x03080000
-	Py_SetPythonHome(python_home);
-#endif
 }
 
 /** @} */

@@ -92,15 +92,14 @@ bool AppControl::Init()
 
     _session->init();
 
-    srd_log_set_context(dsv_log_context());
+    ds_srd_log_set_context(dsv_log_context());
 
 #if defined(_WIN32) && defined(DEBUG_INFO)
     //able run debug with qtcreator
     QString pythonHome = "c:/python";
     QDir pydir;
     if (pydir.exists(pythonHome)){
-        const wchar_t *pyhome = reinterpret_cast<const wchar_t*>(pythonHome.utf16());
-        srd_set_python_home(pyhome);
+        qputenv("PYTHONHOME", pythonHome.toUtf8());
     }
   
 #endif

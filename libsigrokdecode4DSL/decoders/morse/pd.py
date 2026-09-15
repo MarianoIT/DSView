@@ -18,6 +18,7 @@
 ##
 
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 def decode_ditdah(s):
     return tuple({'-': 3, '.': 1}[c] for c in s)
@@ -171,7 +172,7 @@ class Decoder(srd.Decoder):
 
             symbol = (pval, iunits)
 
-            if (self.matched & (0b1 << 1)):
+            if (match_mask(self.matched) & (0b1 << 1)):
                 yield None # Flush word.
                 continue
 

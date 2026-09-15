@@ -28,6 +28,7 @@
  
 # 导出核心模块类，c代码实现的类
 import sigrokdecode as srd
+from common.sigrok_compat import match_mask
 
 # 协议模块类
 class Decoder(srd.Decoder):
@@ -196,5 +197,5 @@ class Decoder(srd.Decoder):
 
     # 底层模块提供的属性：
     # 1. self.samplenum 当前wait()调用匹配结束的采样点位置
-    # 2. self.matched 本次调用wait()后所有通道的匹配结果信息，是一个uint64类型数值，
+    # 2. match_mask(self.matched) 本次调用wait()后所有通道的匹配结果信息，是一个uint64类型数值，
     # 表示０到63个通道的匹配信息，通过位运算来获取具体信息。
