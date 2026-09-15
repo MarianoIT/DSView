@@ -15,6 +15,7 @@
 
 extern "C" {
 #include <libsigrok.h>
+#include "libsigrok-internal.h"
 }
 
 namespace {
@@ -24,6 +25,8 @@ struct CaptureSummary {
     std::atomic<bool> failed{false};
     std::atomic<int> completion_event{0};
     std::atomic<uint64_t> dso_samples{0};
+    std::atomic<uint8_t> dso_min{255};
+    std::atomic<uint8_t> dso_max{0};
     std::atomic<uint64_t> logic_bytes{0};
     std::atomic<uint64_t> packets{0};
     std::vector<uint8_t> channel0_samples;
@@ -45,9 +48,21 @@ void data_callback(const sr_dev_inst *, const sr_datafeed_packet *packet)
     capture_summary->packets++;
     switch (packet->type) {
     case SR_DF_DSO:
-        capture_summary->dso_samples +=
-            static_cast<const sr_datafeed_dso *>(packet->payload)->num_samples;
+    {
+        const auto *dso = static_cast<const sr_datafeed_dso *>(packet->payload);
+        capture_summary->dso_samples += dso->num_samples;
+        const auto *data = static_cast<const uint8_t *>(dso->data);
+        for (int index = 0; index < dso->num_samples; index++) {
+            const uint8_t value = data[index];
+            uint8_t current_min = capture_summary->dso_min;
+            while (value < current_min &&
+                   !capture_summary->dso_min.compare_exchange_weak(current_min, value)) {}
+            uint8_t current_max = capture_summary->dso_max;
+            while (value > current_max &&
+                   !capture_summary->dso_max.compare_exchange_weak(current_max, value)) {}
+        }
         break;
+    }
     case SR_DF_LOGIC:
     {
         const auto *logic = static_cast<const sr_datafeed_logic *>(packet->payload);
@@ -122,6 +137,12 @@ bool set_config_byte(int key, uint8_t value)
 {
     return ds_set_actived_device_config(nullptr, nullptr, key,
         g_variant_new_byte(value)) == SR_OK;
+}
+
+bool set_config_bool(int key, bool value)
+{
+    return ds_set_actived_device_config(nullptr, nullptr, key,
+        g_variant_new_boolean(value)) == SR_OK;
 }
 
 int list_devices()
@@ -215,6 +236,8 @@ int capture_run(int argc, char *argv[])
         failed_setting = "samples";
     else if (ds_enable_device_channel_index(static_cast<int>(channel), TRUE) != SR_OK)
         failed_setting = "channel";
+    else if (mode == DSO && !set_config_bool(SR_CONF_INSTANT, true))
+        failed_setting = "instant";
     else if (mode == DSO && !set_config_byte(SR_CONF_TRIGGER_SOURCE, DSO_TRIGGER_AUTO))
         failed_setting = "trigger";
     if (!failed_setting.empty()) {
@@ -240,6 +263,34 @@ int capture_run(int argc, char *argv[])
     const bool timed_out = !summary.complete;
     if (ds_is_collecting())
         ds_stop_collect();
+
+    double voltage_min = 0;
+    double voltage_max = 0;
+    const char *voltage_source = "unavailable";
+    if (!timed_out && !summary.failed && mode == DSO) {
+        ds_device_full_info device_info{};
+        const GSList *channels = nullptr;
+        if (ds_get_actived_device_info(&device_info) == SR_OK && device_info.di)
+            channels = device_info.di->channels;
+        const sr_channel *probe = nullptr;
+        for (const GSList *item = channels; item; item = item->next) {
+            const auto *candidate = static_cast<const sr_channel *>(item->data);
+            if (candidate->index == channel && candidate->type == SR_CHANNEL_DSO) {
+                probe = candidate;
+                break;
+            }
+        }
+        const bool has_calibration = probe && probe->bits && probe->vdiv && probe->hw_offset;
+        const unsigned bits = has_calibration ? probe->bits : 8;
+        const double vdiv = has_calibration ? probe->vdiv : 1000;
+        const double vfactor = has_calibration ? probe->vfactor : 1;
+        const double offset = has_calibration ? probe->hw_offset : 128;
+        const double max_code = static_cast<double>((1U << bits) - 1U);
+        const double millivolts_per_code = vdiv * vfactor * DS_CONF_DSO_VDIVS / max_code;
+        voltage_min = (offset - summary.dso_max) * millivolts_per_code / 1000.0;
+        voltage_max = (offset - summary.dso_min) * millivolts_per_code / 1000.0;
+        voltage_source = has_calibration ? "driver" : "driver_defaults";
+    }
     capture_summary = nullptr;
     ds_release_actived_device();
 
@@ -267,6 +318,11 @@ int capture_run(int argc, char *argv[])
               << "\",\"samplerate\":" << samplerate
               << ",\"configured_samples\":" << samples
               << ",\"dso_samples\":" << summary.dso_samples
+              << ",\"dso_raw_min\":" << static_cast<unsigned>(summary.dso_min)
+              << ",\"dso_raw_max\":" << static_cast<unsigned>(summary.dso_max)
+              << ",\"voltage_min_v\":" << std::fixed << std::setprecision(6) << voltage_min
+              << ",\"voltage_max_v\":" << voltage_max
+              << ",\"voltage_source\":\"" << voltage_source << "\""
               << ",\"logic_bytes\":" << summary.logic_bytes
               << ",\"channel0_samples\":" << summary.channel0_samples.size()
               << ",\"packets\":" << summary.packets
