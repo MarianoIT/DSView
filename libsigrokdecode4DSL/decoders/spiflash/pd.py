@@ -402,7 +402,21 @@ class Decoder(srd.Decoder):
             self.cmdstate += 1
 
     def handle_be(self, mosi, miso):
-        pass # TODO
+        if self.cmdstate == 1:
+            self.emit_cmd_byte()
+            if self.writestate == 0:
+                self.putx([Ann.WARN, ['Warning: WREN might be missing']])
+        elif self.cmdstate in (2, 3, 4):
+            self.emit_addr_bytes(mosi)
+
+        if self.cmdstate == 4:
+            self.es_cmd = self.es
+            self.putc([Ann.BE, ['Erase block %d ({$})' % self.addr, '@%06x' % self.addr]])
+            if self.addr % self.chip['block_size'] != 0:
+                self.putc([Ann.WARN, ['Warning: Invalid block address alignment']])
+            self.state = None
+        else:
+            self.cmdstate += 1
 
     def handle_ce(self, mosi, miso):
         self.putx([Ann.CE, self.cmd_ann_list()])
@@ -433,10 +447,10 @@ class Decoder(srd.Decoder):
         self.cmdstate += 1
 
     def handle_cp(self, mosi, miso):
-        pass # TODO
+        self.putx([Ann.CP, self.cmd_ann_list()])
 
     def handle_dp(self, mosi, miso):
-        pass # TODO
+        self.putx([Ann.DP, self.cmd_ann_list()])
 
     def handle_rdp_res(self, mosi, miso):
         if self.cmdstate == 1:
@@ -493,10 +507,10 @@ class Decoder(srd.Decoder):
         pass # TODO
 
     def handle_enso(self, mosi, miso):
-        pass # TODO
+        self.putx([Ann.ENSO, self.cmd_ann_list()])
 
     def handle_exso(self, mosi, miso):
-        pass # TODO
+        self.putx([Ann.EXSO, self.cmd_ann_list()])
 
     def handle_rdscur(self, mosi, miso):
         pass # TODO
@@ -505,10 +519,10 @@ class Decoder(srd.Decoder):
         pass # TODO
 
     def handle_esry(self, mosi, miso):
-        pass # TODO
+        self.putx([Ann.ESRY, self.cmd_ann_list()])
 
     def handle_dsry(self, mosi, miso):
-        pass # TODO
+        self.putx([Ann.DSRY, self.cmd_ann_list()])
 
     def output_data_block(self, label, idx):
         # Print accumulated block of data
