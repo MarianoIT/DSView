@@ -18,9 +18,8 @@
 ## along with this program; if not, see <http://www.gnu.org/licenses/>.
 ##
 
-# TODO: Look into arbitration, collision detection, clock synchronisation, etc.
-# TODO: Implement support for inverting SDA/SCL levels (0->1 and 1->0).
-# TODO: Implement support for detecting various bus errors.
+# Passive captures cannot identify which controller loses multi-master
+# arbitration, but malformed partial bytes are reported as bus warnings.
 
 ##
 ## 2022/07/05 DreamSourceLab : Support for different data output formats
@@ -83,6 +82,10 @@ class Decoder(srd.Decoder):
     options = (
         {'id': 'address_format', 'desc': 'Displayed slave address format',
             'default': 'unshifted', 'values': ('shifted', 'unshifted'), 'idn':'dec_1i2c_opt_addr'},
+        {'id': 'invert_scl', 'desc': 'Invert SCL', 'default': 'no',
+            'values': ('no', 'yes')},
+        {'id': 'invert_sda', 'desc': 'Invert SDA', 'default': 'no',
+            'values': ('no', 'yes')},
     )
     annotations = (
         ('7', 'start', 'Start condition'),
@@ -134,6 +137,12 @@ class Decoder(srd.Decoder):
         self.out_binary = self.register(srd.OUTPUT_BINARY)
         self.out_bitrate = self.register(srd.OUTPUT_META,
                 meta=(int, 'Bitrate', 'Bitrate from Start bit to Stop bit'))
+        self.invert_scl = self.options['invert_scl'] == 'yes'
+        self.invert_sda = self.options['invert_sda'] == 'yes'
+        self.scl_sample_edge = 'f' if self.invert_scl else 'r'
+        self.scl_high_level = 'l' if self.invert_scl else 'h'
+        self.sda_start_edge = 'r' if self.invert_sda else 'f'
+        self.sda_stop_edge = 'f' if self.invert_sda else 'r'
 
     def putx(self, data):
         self.put(self.ss, self.es, self.out_ann, data)
@@ -143,6 +152,14 @@ class Decoder(srd.Decoder):
 
     def putb(self, data):
         self.put(self.ss, self.es, self.out_binary, data)
+
+    def normalized_levels(self, scl, sda):
+        return (int(scl) ^ self.invert_scl, int(sda) ^ self.invert_sda)
+
+    def warn_partial_byte(self, condition):
+        if self.bitcount:
+            self.ss = self.es = self.samplenum
+            self.putx([10, ['%s during incomplete byte' % condition, 'Byte error']])
 
     def handle_start(self):
         self.ss, self.es = self.samplenum, self.samplenum
@@ -257,41 +274,53 @@ class Decoder(srd.Decoder):
             # State machine.
             if self.state == 'FIND START':
                 # Wait for a START condition (S): SCL = high, SDA = falling.
-                self.wait({0: 'h', 1: 'f'})
+                self.wait({0: self.scl_high_level, 1: self.sda_start_edge})
                 self.handle_start()
             elif self.state == 'FIND ADDRESS':
                 # Wait for any of the following conditions (or combinations):
                 #  a) Data sampling of receiver: SCL = rising, and/or
                 #  b) START condition (S): SCL = high, SDA = falling, and/or
                 #  c) STOP condition (P): SCL = high, SDA = rising
-                (scl, sda) = self.wait([{0: 'r'}, {0: 'h', 1: 'f'}, {0: 'h', 1: 'r'}])
+                (scl, sda) = self.wait([{0: self.scl_sample_edge},
+                                        {0: self.scl_high_level, 1: self.sda_start_edge},
+                                        {0: self.scl_high_level, 1: self.sda_stop_edge}])
+                (scl, sda) = self.normalized_levels(scl, sda)
 
                 # Check which of the condition(s) matched and handle them.
                 if (self.matched & (0b1 << 0)):
                     self.handle_address_or_data(scl, sda)
                 elif (self.matched & (0b1 << 1)):
+                    self.warn_partial_byte('START')
                     self.handle_start()
                 elif (self.matched & (0b1 << 2)):
+                    self.warn_partial_byte('STOP')
                     self.handle_stop()
             elif self.state == 'FIND DATA':
                 # Wait for any of the following conditions (or combinations):
                 #  a) Data sampling of receiver: SCL = rising, and/or
                 #  b) START condition (S): SCL = high, SDA = falling, and/or
                 #  c) STOP condition (P): SCL = high, SDA = rising
-                (scl, sda) = self.wait([{0: 'r'}, {0: 'h', 1: 'f'}, {0: 'h', 1: 'r'}])
+                (scl, sda) = self.wait([{0: self.scl_sample_edge},
+                                        {0: self.scl_high_level, 1: self.sda_start_edge},
+                                        {0: self.scl_high_level, 1: self.sda_stop_edge}])
+                (scl, sda) = self.normalized_levels(scl, sda)
 
                 # Check which of the condition(s) matched and handle them.
                 if (self.matched & (0b1 << 0)):
                     self.handle_address_or_data(scl, sda)
                 elif (self.matched & (0b1 << 1)):
+                    self.warn_partial_byte('START')
                     self.handle_start()
                 elif (self.matched & (0b1 << 2)):
+                    self.warn_partial_byte('STOP')
                     self.handle_stop()
             elif self.state == 'FIND ACK':
                 # Wait for any of the following conditions (or combinations):
                 #  a) a data/ack bit: SCL = rising.
                 #  b) STOP condition (P): SCL = high, SDA = rising
-                (scl, sda) = self.wait([{0: 'r'}, {0: 'h', 1: 'r'}])
+                (scl, sda) = self.wait([{0: self.scl_sample_edge},
+                                        {0: self.scl_high_level, 1: self.sda_stop_edge}])
+                (scl, sda) = self.normalized_levels(scl, sda)
                 if (self.matched & (0b1 << 0)):
                     self.get_ack(scl, sda)
                 elif (self.matched & (0b1 << 1)):
