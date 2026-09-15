@@ -4,6 +4,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
+#include <iomanip>
 #include <string>
 #include <thread>
 #include <vector>
@@ -24,6 +26,7 @@ struct CaptureSummary {
     std::atomic<uint64_t> dso_samples{0};
     std::atomic<uint64_t> logic_bytes{0};
     std::atomic<uint64_t> packets{0};
+    std::vector<uint8_t> channel0_samples;
 };
 
 CaptureSummary *capture_summary = nullptr;
@@ -46,9 +49,16 @@ void data_callback(const sr_dev_inst *, const sr_datafeed_packet *packet)
             static_cast<const sr_datafeed_dso *>(packet->payload)->num_samples;
         break;
     case SR_DF_LOGIC:
-        capture_summary->logic_bytes +=
-            static_cast<const sr_datafeed_logic *>(packet->payload)->length;
+    {
+        const auto *logic = static_cast<const sr_datafeed_logic *>(packet->payload);
+        capture_summary->logic_bytes += logic->length;
+        const auto *data = static_cast<const uint8_t *>(logic->data);
+        const uint64_t sample_width = 2;
+        const uint64_t sample_count = logic->length / sample_width;
+        for (uint64_t index = 0; index < sample_count; index++)
+            capture_summary->channel0_samples.push_back(data[index * sample_width] & 1U);
         break;
+    }
     case SR_DF_END:
         capture_summary->complete = true;
         break;
@@ -82,6 +92,7 @@ void print_usage()
               << "  dsview-cli devices list\n"
               << "  dsview-cli capture run [--device-index N] [--mode dso|logic]"
               << " [--samplerate HZ] [--samples N] [--channel N] [--timeout-ms N]\n";
+    std::cerr << "  dsview-cli decode clock --input FILE --samplerate HZ\n";
 }
 
 bool parse_uint64(const char *text, uint64_t &value)
@@ -143,6 +154,7 @@ int capture_run(int argc, char *argv[])
     uint64_t channel = 0;
     uint64_t timeout_ms = 5000;
     int16_t mode = DSO;
+    std::string output_path;
 
     for (int index = 3; index < argc; index++) {
         if (index + 1 >= argc) {
@@ -160,6 +172,11 @@ int capture_run(int argc, char *argv[])
                 print_error("invalid_mode", "Mode must be dso or logic");
                 return 1;
             }
+            continue;
+        }
+
+        if (option == "--output") {
+            output_path = argv[index];
             continue;
         }
 
@@ -235,14 +252,84 @@ int capture_run(int argc, char *argv[])
         return 1;
     }
 
+    if (!output_path.empty() && mode == LOGIC) {
+        std::ofstream output(output_path, std::ios::binary);
+        if (!output) {
+            print_error("output_open_failed", "Unable to open capture output");
+            return 1;
+        }
+        output.write(reinterpret_cast<const char *>(summary.channel0_samples.data()),
+            static_cast<std::streamsize>(summary.channel0_samples.size()));
+    }
+
     std::cout << "{\"ok\":true,\"capture\":{\"mode\":\""
               << (mode == DSO ? "dso" : "logic")
               << "\",\"samplerate\":" << samplerate
               << ",\"configured_samples\":" << samples
               << ",\"dso_samples\":" << summary.dso_samples
               << ",\"logic_bytes\":" << summary.logic_bytes
+              << ",\"channel0_samples\":" << summary.channel0_samples.size()
               << ",\"packets\":" << summary.packets
               << ",\"completion_event\":" << summary.completion_event << "}}" << std::endl;
+    return 0;
+}
+
+int decode_clock(int argc, char *argv[])
+{
+    std::string input_path;
+    uint64_t samplerate = 0;
+    for (int index = 3; index < argc; index++) {
+        if (index + 1 >= argc) {
+            print_error("invalid_argument", "Missing argument value");
+            return 1;
+        }
+        const std::string option = argv[index++];
+        if (option == "--input")
+            input_path = argv[index];
+        else if (option == "--samplerate" && !parse_uint64(argv[index], samplerate)) {
+            print_error("invalid_argument", "Samplerate must be an integer");
+            return 1;
+        }
+        else if (option != "--input" && option != "--samplerate") {
+            print_error("invalid_argument", "Unknown decode option");
+            return 1;
+        }
+    }
+    if (input_path.empty() || samplerate == 0) {
+        print_error("invalid_argument", "Clock requires --input and --samplerate");
+        return 1;
+    }
+
+    std::ifstream input(input_path, std::ios::binary);
+    std::vector<uint8_t> samples((std::istreambuf_iterator<char>(input)), {});
+    if (!input && !input.eof()) {
+        print_error("input_open_failed", "Unable to read capture input");
+        return 1;
+    }
+
+    std::vector<uint64_t> rising_edges;
+    for (uint64_t index = 1; index < samples.size(); index++)
+        if (!samples[index - 1] && samples[index])
+            rising_edges.push_back(index);
+
+    std::cout << "{\"ok\":true,\"decoder\":\"clock\",\"samplerate\":"
+              << samplerate << ",\"samples\":" << samples.size() << ",\"annotations\":[";
+    bool first = true;
+    for (size_t index = 1; index < rising_edges.size(); index++) {
+        const uint64_t period_samples = rising_edges[index] - rising_edges[index - 1];
+        if (!period_samples)
+            continue;
+        const double frequency = static_cast<double>(samplerate) / period_samples;
+        const double period = static_cast<double>(period_samples) / samplerate;
+        if (!first)
+            std::cout << ',';
+        first = false;
+        std::cout << "{\"start\":" << rising_edges[index - 1]
+                  << ",\"end\":" << rising_edges[index]
+                  << ",\"frequency_hz\":" << std::fixed << std::setprecision(3) << frequency
+                  << ",\"period_s\":" << std::setprecision(9) << period << '}';
+    }
+    std::cout << "]}" << std::endl;
     return 0;
 }
 
@@ -283,6 +370,8 @@ int main(int argc, char *argv[])
         result = list_devices();
     else if (command == "capture" && action == "run")
         result = capture_run(argc, argv);
+    else if (command == "decode" && action == "clock")
+        result = decode_clock(argc, argv);
     else {
         print_usage();
         print_error("invalid_command", "Unsupported command");
