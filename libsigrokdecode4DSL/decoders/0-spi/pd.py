@@ -108,14 +108,18 @@ class Decoder(srd.Decoder):
             'default': 'msb-first', 'values': ('msb-first', 'lsb-first'), 'idn':'dec_0spi_opt_bitorder'},
         {'id': 'wordsize', 'desc': 'Word size', 'default': 8,
             'values': tuple(range(4,129,1)), 'idn':'dec_0spi_opt_wordsize'},
+        {'id': 'debug', 'desc': 'Debug', 'default': 'no',
+            'values': ('yes', 'no'), 'idn':'dec_0spi_opt_debug'},
     )
     annotations = (
         ('106', 'miso-data', 'MISO data'),
         ('108', 'mosi-data', 'MOSI data'),
+        ('2', 'debug', 'Debug'),
     )
     annotation_rows = (
         ('miso-data', 'MISO data', (0,)),
         ('mosi-data', 'MOSI data', (1,)),
+        ('debug', 'Debug', (2,)),
     )
 
     def __init__(self):
@@ -136,6 +140,7 @@ class Decoder(srd.Decoder):
     def start(self):
         self.out_ann = self.register(srd.OUTPUT_ANN)
         self.bw = (self.options['wordsize'] + 7) // 8
+        self.debug = self.options['debug'] == 'yes'
 
     def metadata(self, key, value):
        if key == srd.SRD_CONF_SAMPLERATE:
@@ -160,6 +165,16 @@ class Decoder(srd.Decoder):
         if self.have_mosi:
             self.put(ss, es, self.out_ann, [1, ['@{1:0>{0}X}'.format(int((self.options['wordsize']+3)/4),self.mosidata)]])
 
+        if self.debug:
+            if self.have_miso:
+                miso_bits = ''.join(str(bit[0]) for bit in reversed(self.misobits))
+                self.put(ss, es, self.out_ann, [2, [
+                    'MISO raw=%s -> 0x%X' % (miso_bits, self.misodata)]])
+            if self.have_mosi:
+                mosi_bits = ''.join(str(bit[0]) for bit in reversed(self.mosibits))
+                self.put(ss, es, self.out_ann, [2, [
+                    'MOSI raw=%s -> 0x%X' % (mosi_bits, self.mosidata)]])
+
     def reset_decoder_state(self):
         self.misodata = 0 if self.have_miso else None
         self.mosidata = 0 if self.have_mosi else None
@@ -180,6 +195,13 @@ class Decoder(srd.Decoder):
 
         ws = self.options['wordsize']
         bo = self.options['bitorder']
+
+        if self.debug:
+            edge = 'rising' if clk else 'falling'
+            self.put(self.samplenum, self.samplenum, self.out_ann, [2, [
+                'SPI sample bit=%d edge=%s CPOL=%d CPHA=%d MISO=%d MOSI=%d' %
+                (self.bitcount, edge, self.options['cpol'], self.options['cpha'],
+                 miso, mosi)]])
 
         # Receive MISO bit into our shift register.
         if self.have_miso:
