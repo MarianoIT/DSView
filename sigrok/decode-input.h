@@ -5,6 +5,11 @@
 #include <cstdint>
 #include <vector>
 
+inline bool dsview_dso_sample_to_logic(uint8_t sample, uint8_t threshold)
+{
+    return sample <= threshold;
+}
+
 // Convert DSView's channel bit planes to the official libsigrokdecode sample ABI.
 // Null planes represent constant channels; negative mappings are absent channels.
 inline std::vector<uint8_t> dsview_interleave(const uint8_t *const *planes,

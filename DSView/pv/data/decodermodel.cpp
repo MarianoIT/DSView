@@ -25,6 +25,8 @@
 #include "decode/rowdata.h"
 #include "decoderstack.h"
 #include "decodermodel.h"
+#include "../log.h"
+#include <ds_types.h>
 
 using namespace boost;
 using namespace std;
@@ -44,9 +46,27 @@ void DecoderModel::setDecoderStack(DecoderStack *decoder_stack)
     _decoder_stack = decoder_stack;
     endResetModel();
 }
+
+void DecoderModel::refresh()
+{
+    beginResetModel();
+    endResetModel();
+    if (_decoder_stack && _decoder_stack->has_spi_message_history())
+        dsv_info("Protocol table refresh: SPI messages=%llu",
+            (u64_t)_decoder_stack->spi_message_count());
+    else if (_decoder_stack && _decoder_stack->has_uart_message_history())
+        dsv_info("Protocol table refresh: UART messages=%llu",
+            (u64_t)_decoder_stack->uart_message_count());
+}
  
 int DecoderModel::rowCount(const QModelIndex & /* parent */) const
 {
+    if (_decoder_stack) {
+        if (_decoder_stack->has_spi_message_history())
+            return _decoder_stack->spi_message_count();
+        if (_decoder_stack->has_uart_message_history())
+            return _decoder_stack->uart_message_count();
+    }
     if (_decoder_stack)
         return _decoder_stack->list_annotation_size();
     else
@@ -54,6 +74,12 @@ int DecoderModel::rowCount(const QModelIndex & /* parent */) const
 }
 int DecoderModel::columnCount(const QModelIndex & /* parent */) const
 {
+    if (_decoder_stack) {
+        if (_decoder_stack->has_spi_message_history())
+            return 3;
+        if (_decoder_stack->has_uart_message_history())
+            return 2;
+    }
     if (_decoder_stack)
         return _decoder_stack->list_rows_size();
     else
@@ -70,6 +96,21 @@ QVariant DecoderModel::data(const QModelIndex &index, int role) const
     }
     else if (role == Qt::DisplayRole) {
         if (_decoder_stack) {
+            if (_decoder_stack->has_spi_message_history()) {
+                DecoderStack::SpiMessage message;
+                if (_decoder_stack->spi_message(index.row(), message)) {
+                    if (index.column() == 0)
+                        return message.timestamp;
+                    return index.column() == 1 ? message.miso : message.mosi;
+                }
+                return QVariant();
+            }
+            if (_decoder_stack->has_uart_message_history()) {
+                DecoderStack::UartMessage message;
+                if (_decoder_stack->uart_message(index.row(), message))
+                    return index.column() == 0 ? message.timestamp : message.rxtx;
+                return QVariant();
+            }
             pv::data::decode::Annotation ann;
             if (_decoder_stack->list_annotation(&ann, index.column(), index.row())) {
                 return ann.annotations().at(0);
@@ -90,6 +131,14 @@ QVariant DecoderModel::headerData(int section,
         return section;
 
     if (_decoder_stack) {
+        if (_decoder_stack->has_spi_message_history()) {
+            static const char *const titles[] = {"Date", "MISO", "MOSI"};
+            return section >= 0 && section < 3 ? titles[section] : QVariant();
+        }
+        if (_decoder_stack->has_uart_message_history()) {
+            static const char *const titles[] = {"Date", "RX/TX"};
+            return section >= 0 && section < 2 ? titles[section] : QVariant();
+        }
         QString title;
         if (_decoder_stack->list_row_title(section, title))
             return title;

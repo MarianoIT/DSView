@@ -79,6 +79,17 @@ private:
     static const uint64_t MaxChunkSize = 1024 * 16;
 
 public:
+    struct SpiMessage {
+        QString timestamp;
+        QString miso;
+        QString mosi;
+    };
+
+    struct UartMessage {
+        QString timestamp;
+        QString rxtx;
+    };
+
     enum decode_state {
         Stopped,
         Running
@@ -96,7 +107,7 @@ public:
         return _stack;
     }
 
-    const char* get_root_decoder_id();
+    const char* get_root_decoder_id() const;
 
 	void add_sub_decoder(decode::Decoder *decoder);
     void remove_sub_decoder(decode::Decoder *decoder);
@@ -188,9 +199,19 @@ public:
         return _result_count;
     }
 
+    bool has_spi_message_history() const;
+    uint64_t spi_message_count() const;
+    bool spi_message(uint64_t index, SpiMessage &message) const;
+    bool has_uart_message_history() const;
+    uint64_t uart_message_count() const;
+    bool uart_message(uint64_t index, UartMessage &message) const;
+    void finalize_messages();
+
 private:
     void decode_data(const uint64_t decode_start, const uint64_t decode_end, srd_session *const session, srd_decoder_inst *logic_di);
 	void execute_decode_stack();
+	void append_spi_message();
+    void append_uart_message();
 	static void annotation_callback(srd_proto_data *pdata, void *self);
     void do_decode_work();
   
@@ -225,6 +246,13 @@ private:
     int             _progress;
     bool            _is_decoding;
     uint64_t        _result_count;
+    QString         _spi_message_timestamp;
+    bool            _spi_message_recorded;
+    std::vector<SpiMessage> _spi_messages;
+    mutable std::mutex _spi_messages_mutex;
+    bool            _uart_message_recorded;
+    std::vector<UartMessage> _uart_messages;
+    mutable std::mutex _uart_messages_mutex;
 
 	friend class DecoderStackTest::TwoDecoderStack;
 };

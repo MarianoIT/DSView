@@ -81,6 +81,7 @@ private:
 
     static const int ControlRectWidth = 5;
     static const int MaxAnnType = 100;
+	static const int CompactAnnotationHeight = 26;
 
     static const QString RegionStart;
     static const QString RegionEnd;

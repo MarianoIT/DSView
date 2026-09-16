@@ -82,6 +82,7 @@ ProtocolDock::ProtocolDock(QWidget *parent, view::View &view, SigSession *sessio
     {
         const srd_decoder *const d = (srd_decoder*)l->data;
         assert(d);
+        (void)d;
 
         DecoderInfoItem *info = new DecoderInfoItem();
         srd_decoder *dec = (srd_decoder *)(l->data);
@@ -472,7 +473,7 @@ void ProtocolDock::decoded_progress(int progress)
         index++;
     }
 
-    if (progress == 0 || progress % 10 == 1){
+    if (progress == 0 || progress == 100 || progress % 10 == 1){
         update_model();
     }  
 }

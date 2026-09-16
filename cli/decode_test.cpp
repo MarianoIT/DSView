@@ -25,11 +25,15 @@ static void annotation(srd_proto_data *packet, void *user)
 }
 static bool decode(const char *id, const std::map<std::string, int> &channels,
     const std::vector<uint8_t> &samples, unsigned width, std::vector<Annotation> &output,
-    bool expect_error = false, const char *stack = nullptr)
+    bool expect_error = false, const char *stack = nullptr,
+    const std::map<std::string, std::string> &decoder_options = {})
 {
     srd_session *session = nullptr;
     if (srd_session_new(&session) != SRD_OK) return false;
     GHashTable *options = g_hash_table_new(g_str_hash, g_str_equal);
+    for (const auto &entry : decoder_options)
+        g_hash_table_insert(options, g_strdup(entry.first.c_str()),
+            g_variant_ref_sink(g_variant_new_string(entry.second.c_str())));
     auto *instance = srd_inst_new(session, id, options);
     auto *child = stack ? srd_inst_new(session, stack, options) : nullptr;
     g_hash_table_destroy(options);
@@ -150,7 +154,9 @@ int main(int argc, char **argv)
         const unsigned offsets[] = {5, 0, 0};
         const int mapping[] = {9, 2, -1};
         const std::vector<uint8_t> expected = {4, 2, 4, 0, 4, 2, 4, 2};
-        ok = dsview_interleave(planes, constants, offsets, mapping, 3, 4, 2) == expected && ok;
+        ok = dsview_interleave(planes, constants, offsets, mapping, 3, 4, 2) == expected &&
+            dsview_dso_sample_to_logic(199, 200) &&
+            !dsview_dso_sample_to_logic(202, 200) && ok;
         for (const char *fixture : {"dsview_regression", "dsview_sink", "dsview_error"})
             ok = srd_decoder_load(fixture) == SRD_OK && ok;
         for (unsigned iteration = 0; ok && iteration < 20; iteration++) {
@@ -174,14 +180,20 @@ int main(int argc, char **argv)
         std::vector<uint8_t> spi;
         auto append = [&](unsigned value, unsigned length) { for (unsigned i=0; i<length; i++) { spi.push_back(value & 255); spi.push_back(value >> 8); } };
         append(4, 8); append(0, 4);
-        for (int bit = 7; bit >= 0; bit--) { unsigned data = ((0xa5 >> bit) & 1) << 9; append(data, 4); append(data | 1, 4); }
+        for (unsigned character : std::string("HOLA"))
+            for (int bit = 7; bit >= 0; bit--) {
+                unsigned data = ((character >> bit) & 1) << 9;
+                append(data, 4); append(data | 1, 4);
+            }
         append(0, 4); append(4, 8);
         std::vector<Annotation> output;
         ok = ok && decode("0:spi", {{"clk",0},{"mosi",9},{"cs",2}}, spi, 2, output);
-        bool byte = false;
-        for (auto &item : output) if (item.hex == "A5") byte = true;
-        ok = ok && byte;
-        std::printf("Clock chunks/repeated sessions and remapped SPI byte A5: %s\n", ok ? "passed" : "FAILED");
+        std::vector<std::string> spi_bytes;
+        for (const auto &item : output)
+            if (item.hex == "48" || item.hex == "4F" || item.hex == "4C" || item.hex == "41")
+                spi_bytes.push_back(item.hex);
+        ok = ok && spi_bytes == std::vector<std::string>({"48", "4F", "4C", "41"});
+        std::printf("Clock chunks/repeated sessions and remapped SPI bytes HOLA: %s\n", ok ? "passed" : "FAILED");
     }
     srd_exit();
     return ok ? 0 : 1;

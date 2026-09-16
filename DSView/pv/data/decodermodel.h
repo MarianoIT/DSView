@@ -48,6 +48,7 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation,int role) const;
 
     void setDecoderStack(DecoderStack *decoder_stack);
+    void refresh();
 
     inline  DecoderStack* getDecoderStack(){
         return _decoder_stack;

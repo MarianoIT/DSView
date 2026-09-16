@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <assert.h>
+#include <sstream>
 
 #include "decoderstack.h"
 #include "dsosnapshot.h"
@@ -34,6 +35,7 @@
 #include "decode/annotation.h"
 #include "decode/rowdata.h"
 #include "../sigsession.h"
+#include "decodermodel.h"
 #include "../view/logicsignal.h"
 #include "../dsvdef.h"
 #include "../log.h"
@@ -74,6 +76,8 @@ DecoderStack::DecoderStack(pv::SigSession *session,
     _progress = 0;
     _is_decoding = false;
     _result_count = 0;
+    _spi_message_recorded = false;
+    _uart_message_recorded = false;
     
     _stack.push_back(new decode::Decoder(dec));
  
@@ -371,6 +375,169 @@ bool DecoderStack::list_row_title(int row, QString &title)
 void DecoderStack::clear()
 {
     init();
+    std::lock_guard<std::mutex> lock(_spi_messages_mutex);
+    _spi_messages.clear();
+    std::lock_guard<std::mutex> uart_lock(_uart_messages_mutex);
+    _uart_messages.clear();
+}
+
+bool DecoderStack::has_spi_message_history() const
+{
+    const char *decoder_id = get_root_decoder_id();
+    return decoder_id && (!strcmp(decoder_id, "0:spi") || !strcmp(decoder_id, "1:spi"));
+}
+
+uint64_t DecoderStack::spi_message_count() const
+{
+    std::lock_guard<std::mutex> lock(_spi_messages_mutex);
+    return _spi_messages.size();
+}
+
+bool DecoderStack::spi_message(uint64_t index, SpiMessage &message) const
+{
+    std::lock_guard<std::mutex> lock(_spi_messages_mutex);
+    if (index >= _spi_messages.size())
+        return false;
+
+    message = _spi_messages[index];
+    return true;
+}
+
+bool DecoderStack::has_uart_message_history() const
+{
+    const char *decoder_id = get_root_decoder_id();
+    if (!decoder_id)
+        return false;
+
+    const QString id = QString::fromUtf8(decoder_id);
+    return id == "uart" || id.endsWith(":uart", Qt::CaseInsensitive);
+}
+
+uint64_t DecoderStack::uart_message_count() const
+{
+    std::lock_guard<std::mutex> lock(_uart_messages_mutex);
+    return _uart_messages.size();
+}
+
+bool DecoderStack::uart_message(uint64_t index, UartMessage &message) const
+{
+    std::lock_guard<std::mutex> lock(_uart_messages_mutex);
+    if (index >= _uart_messages.size())
+        return false;
+
+    message = _uart_messages[index];
+    return true;
+}
+
+void DecoderStack::append_spi_message()
+{
+    if (!has_spi_message_history() || _spi_message_recorded)
+        return;
+
+    SpiMessage message;
+    message.timestamp = _spi_message_timestamp;
+    for (const auto &entry : _rows) {
+        const QString title = entry.first.title();
+        QString *output = title.endsWith(": MISO data") ? &message.miso :
+            (title.endsWith(": MOSI data") ? &message.mosi : NULL);
+        if (!output)
+            continue;
+
+        const uint64_t count = entry.second->get_annotation_size();
+        dsv_info("SPI message row %s has %llu annotations.",
+            title.toUtf8().constData(), (u64_t)count);
+        for (uint64_t index = 0; index < count; index++) {
+            Annotation annotation;
+            if (!entry.second->get_annotation(&annotation, index) ||
+                annotation.annotations().empty())
+                continue;
+
+            QString byte = annotation.annotations().front();
+            if (byte.startsWith('@'))
+                byte.remove(0, 1);
+            if (!output->isEmpty())
+                output->append(' ');
+            output->append(byte);
+        }
+    }
+
+    if (message.miso.isEmpty() && message.mosi.isEmpty()) {
+        dsv_info("SPI message contained no complete data bytes.");
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(_spi_messages_mutex);
+    static const size_t MaxSpiMessages = 256;
+    if (_spi_messages.size() == MaxSpiMessages)
+        _spi_messages.erase(_spi_messages.begin());
+    _spi_messages.push_back(message);
+    _spi_message_recorded = true;
+    dsv_info("SPI frame decoded at %s: MISO=[%s] MOSI=[%s]",
+        message.timestamp.toUtf8().constData(),
+        message.miso.toUtf8().constData(), message.mosi.toUtf8().constData());
+
+    DecoderModel *model = _session->get_decoder_model();
+    QMetaObject::invokeMethod(model, [model]() {
+        model->refresh();
+    }, Qt::QueuedConnection);
+}
+
+void DecoderStack::append_uart_message()
+{
+    if (!has_uart_message_history() || _uart_message_recorded)
+        return;
+
+    UartMessage message;
+    message.timestamp = _spi_message_timestamp;
+    for (const auto &entry : _rows) {
+        if (!entry.first.title().endsWith(": RX/TX"))
+            continue;
+
+        const uint64_t count = entry.second->get_annotation_size();
+        dsv_info("UART message row %s has %llu annotations.",
+            entry.first.title().toUtf8().constData(), (u64_t)count);
+        for (uint64_t index = 0; index < count; index++) {
+            Annotation annotation;
+            if (!entry.second->get_annotation(&annotation, index) ||
+                annotation.format() != 0 || annotation.annotations().empty())
+                continue;
+
+            QString byte = annotation.annotations().front();
+            if (byte.startsWith('@'))
+                byte.remove(0, 1);
+            if (!message.rxtx.isEmpty())
+                message.rxtx.append(' ');
+            message.rxtx.append(byte);
+        }
+    }
+
+    if (message.rxtx.isEmpty())
+        return;
+
+    std::lock_guard<std::mutex> lock(_uart_messages_mutex);
+    static const size_t MaxUartMessages = 256;
+    if (_uart_messages.size() == MaxUartMessages)
+        _uart_messages.erase(_uart_messages.begin());
+    _uart_messages.push_back(message);
+    _uart_message_recorded = true;
+    dsv_info("UART frame decoded at %s: RX/TX=[%s]",
+        message.timestamp.toUtf8().constData(), message.rxtx.toUtf8().constData());
+
+    DecoderModel *model = _session->get_decoder_model();
+    QMetaObject::invokeMethod(model, [model]() {
+        model->refresh();
+    }, Qt::QueuedConnection);
+}
+
+void DecoderStack::finalize_messages()
+{
+    if (IsRunning())
+        return;
+
+    append_spi_message();
+    append_uart_message();
+    if (_spi_message_recorded || _uart_message_recorded)
+        new_decode_data();
 }
 
 void DecoderStack::init()
@@ -381,6 +548,8 @@ void DecoderStack::init()
     _no_memory = false;
     _snapshot = NULL;
     _result_count = 0;
+    _spi_message_recorded = false;
+    _uart_message_recorded = false;
 
     for (auto i = _rows.begin();i != _rows.end(); i++) { 
         (*i).second->clear();
@@ -438,6 +607,7 @@ void DecoderStack::do_decode_work()
     _options_changed = false;
 
     init();
+    _spi_message_timestamp = _session->get_session_time().toString("yyyy-MM-dd HH:mm:ss.zzz");
 
     _snapshot = NULL;
     _dso_snapshot = NULL;
@@ -513,7 +683,9 @@ uint64_t DecoderStack::get_max_sample_count()
 void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decode_end, srd_session *const session, srd_decoder_inst *logic_di)
 {
     decode_task_status *status = _stask_stauts;
-
+    const bool spi_debug = logic_di->decoder &&
+        (!strcmp(logic_di->decoder->id, "0:spi") || !strcmp(logic_di->decoder->id, "1:spi"));
+  
     //uint8_t *chunk = NULL;
     uint64_t last_cnt = 0;
     uint64_t notify_cnt = (decode_end - decode_start + 1)/100;
@@ -542,6 +714,9 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
 
     std::vector<void *> lbp_array(logic_di->dec_num_channels, nullptr);
     std::vector<uint8_t> dso_thresholds(logic_di->dec_num_channels);
+    std::vector<int> spi_debug_last_values(logic_di->dec_num_channels, -1);
+    std::vector<unsigned> spi_debug_transition_counts(logic_di->dec_num_channels, 0);
+    std::vector<uint8_t> spi_debug_last_interleaved;
 
     if (_dso_snapshot) {
         const uint64_t sample_count = _dso_snapshot->get_sample_count();
@@ -558,6 +733,9 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
                 maximum = std::max(maximum, samples[sample_index]);
             }
             dso_thresholds[j] = minimum + (maximum - minimum) / 2;
+            if (spi_debug)
+                dsv_info("SPI debug threshold: decoder-channel=%d source-channel=%d min=%u max=%u threshold=%u high=(sample <= threshold)",
+                    j, sig_index, minimum, maximum, dso_thresholds[j]);
         }
     }
 
@@ -621,7 +799,7 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
                     std::vector<uint8_t> &digital = dso_chunks[j];
                     digital.assign((chunk_end - i + 7) / 8, 0);
                     for (uint64_t sample_index = 0; sample_index < chunk_end - i; sample_index++) {
-                        if (samples[sample_index] >= dso_thresholds[j])
+                        if (dsview_dso_sample_to_logic(samples[sample_index], dso_thresholds[j]))
                             digital[sample_index / 8] |= 1 << (sample_index % 8);
                     }
                     chunk.push_back(digital.data());
@@ -693,11 +871,6 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
         }
     }
 
-    _progress = 100;
-    _is_decoding = false;
-    
-    new_decode_data();
-
     // the task is normal ends,so all samples was processed;
     if (!bError && bEndTime){
        ds_srd_session_end(session, &error);
@@ -707,6 +880,15 @@ void DecoderStack::decode_data(const uint64_t decode_start, const uint64_t decod
             dsv_err("Failed to call srd_session_end:%s", error);
         }
     }
+
+    if (!bError && bEndTime) {
+        append_spi_message();
+        append_uart_message();
+    }
+
+    _progress = 100;
+    _is_decoding = false;
+    new_decode_data();
 
     if (error != NULL){
         g_free(error);
@@ -914,7 +1096,7 @@ int64_t DecoderStack::get_mark_index()
     return _mark_index;
 }
 
-const char* DecoderStack::get_root_decoder_id()
+const char* DecoderStack::get_root_decoder_id() const
 {
     if (_stack.size() > 0){
         decode::Decoder *dec = _stack.front();
