@@ -108,6 +108,8 @@ class Decoder(srd.Decoder):
             'default': 'msb-first', 'values': ('msb-first', 'lsb-first'), 'idn':'dec_1spi_opt_bitorder'},
         {'id': 'wordsize', 'desc': 'Word size', 'default': 8,
             'values': tuple(range(5,129,1)), 'idn':'dec_1spi_opt_wordsize'},
+        {'id': 'debug', 'desc': 'Debug', 'default': 'no',
+            'values': ('yes', 'no'), 'idn':'dec_1spi_opt_debug'},
         {'id': 'frame', 'desc': 'Frame Decoder', 'default': 'no',
             'values': ('yes', 'no'), 'idn':'dec_1spi_opt_frame'},
     )
@@ -120,6 +122,7 @@ class Decoder(srd.Decoder):
 
         ('6', 'miso-transfer', 'MISO transfer'),
         ('8', 'mosi-transfer', 'MOSI transfer'),
+        ('7', 'debug', 'Debug'),
     )
     annotation_rows = (
         ('miso-bits', 'MISO bits', (2,)),
@@ -129,6 +132,7 @@ class Decoder(srd.Decoder):
         ('mosi-data', 'MOSI data', (1,)),
         ('mosi-transfer', 'MOSI transfer', (6,)),
         ('other', 'Other', (4,)),
+        ('debug', 'Debug', (7,)),
     )
     binary = (
         ('miso', 'MISO'),
@@ -159,6 +163,7 @@ class Decoder(srd.Decoder):
         self.out_bitrate = self.register(srd.OUTPUT_META,
                 meta=(int, 'Bitrate', 'Bitrate during transfers'))
         self.bw = (self.options['wordsize'] + 7) // 8
+        self.debug = self.options['debug'] == 'yes'
 
     def metadata(self, key, value):
        if key == srd.SRD_CONF_SAMPLERATE:
@@ -211,6 +216,16 @@ class Decoder(srd.Decoder):
             self.put(ss, es, self.out_ann, [0, ['@{1:0>{0}X}'.format(int((self.options['wordsize']+3)/4),self.misodata)]])
         if self.have_mosi:
             self.put(ss, es, self.out_ann, [1, ['@{1:0>{0}X}'.format(int((self.options['wordsize']+3)/4),self.mosidata)]])
+
+        if self.debug:
+            if self.have_miso:
+                miso_bits = ''.join(str(bit[0]) for bit in reversed(self.misobits))
+                self.put(ss, es, self.out_ann, [7, [
+                    'MISO raw=%s -> 0x%X' % (miso_bits, self.misodata)]])
+            if self.have_mosi:
+                mosi_bits = ''.join(str(bit[0]) for bit in reversed(self.mosibits))
+                self.put(ss, es, self.out_ann, [7, [
+                    'MOSI raw=%s -> 0x%X' % (mosi_bits, self.mosidata)]])
 
     def reset_decoder_state(self):
         self.misodata = 0 if self.have_miso else None

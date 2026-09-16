@@ -369,6 +369,7 @@ void AnnotationResTable::decimalToBinString(unsigned long long num, int bitSize,
 
 	assert(buffer);
 	assert(buffer_size);
+	(void)buffer_size;
 	 
 	if (bitSize < 8)
 		bitSize = 8;

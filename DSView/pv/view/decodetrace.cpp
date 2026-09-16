@@ -258,7 +258,8 @@ void DecodeTrace::paint_mid(QPainter &p, int left, int right, QColor fore, QColo
     if (end_sample < start_sample)
         return;
 
-    const int annotation_height = _view->get_signalHeight();
+    const int annotation_height = min(_view->get_signalHeight(),
+        CompactAnnotationHeight);
 
     // Iterate through the rows
     assert(_view);
@@ -335,10 +336,12 @@ void DecodeTrace::draw_annotation(const pv::data::decode::Annotation &a,
     double samples_per_pixel, double pixels_offset, int y,
     size_t base_colour, double min_annWidth, QColor fore, QColor back, double &last_x)
 {
-    const double start = max(a.start_sample() / samples_per_pixel -
+    double start = max(a.start_sample() / samples_per_pixel -
         pixels_offset, (double)left);
-    const double end = min(a.end_sample() / samples_per_pixel -
+    double end = min(a.end_sample() / samples_per_pixel -
         pixels_offset, (double)right);
+
+    const int annotation_height = min(h, CompactAnnotationHeight);
 
     const size_t colour = ((base_colour + a.type()) % MaxAnnType) % countof(Colours);
 	const QColor &fill = Colours[colour];
@@ -373,11 +376,11 @@ void DecodeTrace::draw_annotation(const pv::data::decode::Annotation &a,
     }
 
 	if (a.start_sample() == a.end_sample()){
-		draw_instant(a, p, fill, outline, text_color, h,
+        draw_instant(a, p, fill, outline, text_color, annotation_height,
             start, y, min_annWidth);
     }
     else {
-		draw_range(a, p, fill, outline, text_color, h,
+        draw_range(a, p, fill, outline, text_color, annotation_height,
             start, end, y, fore, back);
     
         if ((a.type()/100 == 2) && (end - start > 20)) 

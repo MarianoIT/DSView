@@ -1475,8 +1475,7 @@ uint8_t *LogicSnapshot::get_block_buf(int block_index, int sig_index, bool &samp
 
 uint8_t *LogicSnapshot::get_block_buf_unlock(int block_index, int sig_index, bool &sample)
 {
-    int block_num = get_block_num_unlock();
-    assert(block_index < block_num);
+    assert(block_index < get_block_num_unlock());
 
     int order = get_ch_order(sig_index);
     if (order == -1) {

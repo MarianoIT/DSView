@@ -1204,11 +1204,14 @@ SRD_PRIV int srd_inst_decode(struct srd_decoder_inst *di,
 		return SRD_ERR_ARG;
 	}
 
-    if (unitsize > INT_MAX || abs_end_samplenum - abs_start_samplenum > inbuflen / unitsize)
-        return SRD_ERR_ARG;
-    for (int index = 0; index < di->dec_num_channels; index++)
-        if (di->dec_channelmap[index] >= 0 && (uint64_t)di->dec_channelmap[index] / 8 >= unitsize)
+	if (unitsize > INT_MAX || abs_end_samplenum - abs_start_samplenum > inbuflen / unitsize) {
+		return SRD_ERR_ARG;
+	}
+	for (int index = 0; index < di->dec_num_channels; index++) {
+		if (di->dec_channelmap[index] >= 0 && (uint64_t)di->dec_channelmap[index] / 8 >= unitsize) {
             return SRD_ERR_ARG;
+		}
+	}
 	di->data_unitsize = unitsize;
 
 	srd_dbg("Decoding: abs start sample %" PRIu64 ", abs end sample %"

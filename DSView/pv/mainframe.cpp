@@ -92,9 +92,13 @@ MainFrame::MainFrame()
 
     AppControl::Instance()->SetTopWindow(this);
   
+#ifndef Q_OS_MACOS
    bool isWin32 = false;
+#endif
 
-#ifdef _WIN32
+#ifdef Q_OS_MACOS
+    setWindowFlags(Qt::Window);
+#elif defined(_WIN32)
     setWindowFlags(Qt::FramelessWindowHint);
     _is_win32_parent_window = true;
     _taskBtn = NULL;
@@ -120,6 +124,16 @@ MainFrame::MainFrame()
     icon.addFile(QString::fromUtf8(":/icons/logo.svg"), QSize(), QIcon::Normal, QIcon::Off);
     setWindowIcon(icon);
     
+#ifdef Q_OS_MACOS
+    // Let macOS provide the title bar and resize borders.
+    _mainWindow = new MainWindow(NULL, this);
+    _mainWindow->setWindowFlags(Qt::Widget);
+
+    _layout = new QGridLayout(this);
+    _layout->setSpacing(0);
+    _layout->setContentsMargins(0, 0, 0, 0);
+    _layout->addWidget(_mainWindow, 0, 0);
+#else
     _titleBar = new toolbars::TitleBar(true, this, this, false);
     _mainWindow = new MainWindow(_titleBar, this);
     _mainWindow->setWindowFlags(Qt::Widget);
@@ -177,6 +191,8 @@ MainFrame::MainFrame()
     else{
         _layout->addLayout(vbox, 0, 0);
     }
+
+#endif // Q_OS_MACOS
 
 #ifdef _WIN32
     _taskBtn = new QWinTaskbarButton(this);
@@ -293,7 +309,8 @@ void MainFrame::resizeEvent(QResizeEvent *event)
         show_border();
     }
 
-    _titleBar->setRestoreButton(IsMaxsized());
+    if (_titleBar)
+        _titleBar->setRestoreButton(IsMaxsized());
     _layout->update();
 }
 
@@ -408,6 +425,12 @@ void MainFrame::changeEvent(QEvent *event)
 
 bool MainFrame::eventFilter(QObject *object, QEvent *event)
 { 
+#ifdef Q_OS_MACOS
+    // Native movement and resizing bypass the custom border mouse handlers.
+    if (object == this && (event->type() == QEvent::Move || event->type() == QEvent::Resize))
+        saveNormalRegion();
+    return QFrame::eventFilter(object, event);
+#else
     const QEvent::Type type = event->type();
     const QMouseEvent *const mouse_event = (QMouseEvent*)event;
 
@@ -585,6 +608,7 @@ bool MainFrame::eventFilter(QObject *object, QEvent *event)
     } 
     
     return QFrame::eventFilter(object, event);
+#endif
 }
 
 void MainFrame::saveNormalRegion()
@@ -614,11 +638,21 @@ void MainFrame::saveNormalRegion()
 #endif
 
     if (_parentNativeWidget == NULL){
+#ifdef Q_OS_MACOS
+        // move() restores the frame position, while resize() restores the client size.
+        QRect rc(pos(), size());
+#else
         QRect rc = geometry();
+#endif
         app.frameOptions.left = rc.left();
         app.frameOptions.top = rc.top();
+#ifdef Q_OS_MACOS
+        app.frameOptions.right = rc.x() + rc.width();
+        app.frameOptions.bottom = rc.y() + rc.height();
+#else
         app.frameOptions.right = rc.right();
         app.frameOptions.bottom = rc.bottom();
+#endif
         app.frameOptions.x = rc.left();
         app.frameOptions.y = rc.top(); 
     }
@@ -855,6 +889,10 @@ bool MainFrame::IsNormalsized()
     }
 #endif
 
+#ifdef Q_OS_MACOS
+    if (QFrame::isFullScreen())
+        return false;
+#endif
     if (!QFrame::isMaximized() && !QFrame::isMinimized()){
         return true;
     }
@@ -863,7 +901,7 @@ bool MainFrame::IsNormalsized()
 
 bool MainFrame::IsMoving()
 {
-    return _titleBar->IsMoving();
+    return _titleBar && _titleBar->IsMoving();
 }
 
 void MainFrame::ReadSettings()
@@ -1018,7 +1056,8 @@ void MainFrame::ReadSettings()
 
     // restore dockwidgets
     _mainWindow->restore_dock();
-    _titleBar->setRestoreButton(app.frameOptions.isMax);
+    if (_titleBar)
+        _titleBar->setRestoreButton(app.frameOptions.isMax);
     _initWndInfo.k = k;
 }
 

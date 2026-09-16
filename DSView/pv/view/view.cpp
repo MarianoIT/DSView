@@ -1108,8 +1108,7 @@ void View::del_xcursor(XCursor* xcursor)
 void View::set_cursor_middle(int index)
 {
     auto &lst = get_cursorList();
-    int size = lst.size();
-    assert(index < size);
+    assert(index >= 0 && index < (int)lst.size());
 
     int width = get_view_width();
    // if (width > 0);

@@ -102,6 +102,7 @@ namespace pv
         _is_action = false;
         _decoder_pannel = NULL;
         _is_triged = false;
+        _trigger_decode_started = false;
         _dso_status_valid = false;
         _is_task_end = false;
         _capture_work_time = 0;
@@ -649,6 +650,7 @@ namespace pv
         
         _capture_times++;
         _is_triged = false;
+        _trigger_decode_started = false;
 
         int mode = _device_agent.get_work_mode();
         bool bAddDecoder = false;
@@ -726,17 +728,6 @@ namespace pv
         if (_device_agent.start() == false){
             dsv_err("Start collect error!");
             return false;
-        }
-
-        if (mode == LOGIC)
-        {
-            for (auto de : _decode_traces){
-                if (bAddDecoder){
-                    de->decoder()->set_capture_end_flag(false);                 
-                    de->frame_ended();
-                    add_decode_task(de);
-                }
-            } 
         }
 
         return true;
@@ -1153,6 +1144,10 @@ namespace pv
         }
         else
         {
+            _is_triged = true;
+            _trig_time = QDateTime::currentDateTime();
+            set_session_time(_trig_time);
+
             int probe_count = 0;
             int probe_en_count = 0;
 
@@ -1218,6 +1213,17 @@ namespace pv
 
         set_receive_data_len(o.length * 8 / get_ch_num(SR_CHANNEL_LOGIC));
 
+        if (_is_triged && !_trigger_decode_started && o.length > 0)
+        {
+            _trigger_decode_started = true;
+            dsv_info("Triggered logic frame received: starting protocol decoders");
+            for (auto decoder : _decode_traces) {
+                decoder->decoder()->set_capture_end_flag(false);
+                decoder->frame_ended();
+                add_decode_task(decoder);
+            }
+        }
+
         _data_updated = true;
     }
 
@@ -1269,6 +1275,20 @@ namespace pv
         {
             // Append to the existing data snapshot
             _capture_data->get_dso()->append_payload(o);
+        }
+
+        const bool decode_triggered_frame = o.trig_flag ||
+            (_is_triged && !_trigger_decode_started);
+        if (decode_triggered_frame && o.num_samples > 0)
+        {
+            _trigger_decode_started = true;
+            dsv_info("DSO triggered frame received: samples=%d trigger-channel=%u",
+                o.num_samples, o.trig_ch);
+            for (auto decoder : _decode_traces) {
+                decoder->decoder()->set_capture_end_flag(false);
+                decoder->frame_ended();
+                add_decode_task(decoder);
+            }
         }
 
         for (auto s : _signals)
@@ -1453,8 +1473,14 @@ namespace pv
                 else{
                     if (mode == DSO) {
                         for (auto decoder : _decode_traces) {
-                            decoder->frame_ended();
-                            add_decode_task(decoder);
+                            decoder->decoder()->set_capture_end_flag(true);
+                            if (!_trigger_decode_started) {
+                                decoder->frame_ended();
+                                add_decode_task(decoder);
+                            }
+                            else {
+                                decoder->decoder()->finalize_messages();
+                            }
                         }
                     }
                     if (mode == DSO && _is_instant){             
@@ -1646,8 +1672,7 @@ namespace pv
 
     void SigSession::remove_decoder(int index)
     {
-        int size = (int)_decode_traces.size();
-        assert(index < size);
+        assert(index >= 0 && index < (int)_decode_traces.size());
 
         auto it = _decode_traces.begin() + index;
         auto trace = (*it);
@@ -1687,10 +1712,12 @@ namespace pv
             return;
         }
 
-        if (have_view_data() && !is_working())
+        if (have_view_data())
         {
             remove_decode_task(trace); // remove old task
             trace->decoder()->clear();
+            trace->decoder()->set_capture_end_flag(!is_working());
+            trace->frame_ended();
             add_decode_task(trace);
             data_updated();
         }
@@ -1961,6 +1988,7 @@ namespace pv
             return _decode_traces[index];
         }
         assert(false);
+        return nullptr;
     }
 
     view::DecodeTrace *SigSession::get_top_decode_task()
@@ -2253,7 +2281,7 @@ namespace pv
                         }
                     }
 
-                    if (bAddDecoder){
+                    if (bAddDecoder && !_trigger_decode_started){
                         clear_all_decode_task2();
                         clear_decode_result();
                     }
@@ -2279,9 +2307,12 @@ namespace pv
                     {
                         de->decoder()->set_capture_end_flag(true);
 
-                        if (bAddDecoder){ 
+                        if (bAddDecoder && !_trigger_decode_started){ 
                             de->frame_ended();
                             add_decode_task(de);
+                        }
+                        else if (_trigger_decode_started) {
+                            de->decoder()->finalize_messages();
                         }
                     }
 

@@ -831,6 +831,7 @@ static int dev_destroy(struct sr_dev_inst *sdi)
     assert(sdi);
     dev_close(sdi); 
     sr_dev_inst_free(sdi);
+    return SR_OK;
 }
 
 static int config_get(int id, GVariant **data, const struct sr_dev_inst *sdi,

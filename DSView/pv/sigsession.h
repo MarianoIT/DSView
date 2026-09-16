@@ -586,6 +586,7 @@ private:
     QDateTime   _session_time;
     QDateTime   _trig_time;
     bool        _is_triged;
+    bool        _trigger_decode_started;
     bool        _trigger_flag;
     uint8_t     _trigger_ch;
     bool        _hw_replied;
