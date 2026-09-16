@@ -82,6 +82,7 @@ DsoSignal::DsoSignal(data::DsoSnapshot *data,
     _hover_en = false;
     _hover_index = 0;
     _hover_value = 0;
+    _zero_offset = 0;
 
     GVariant *gvar_list, *gvar_list_vdivs;
 
@@ -466,7 +467,7 @@ void DsoSignal::set_zero_vpos(int pos)
 
 void DsoSignal::set_zero_ratio(double ratio)
 {
-    _zero_offset = ratio2value(ratio); 
+    _zero_offset = ratio2value(ratio);
     session->get_device()->set_config_uint16(SR_CONF_PROBE_OFFSET,
                           _zero_offset, _probe, NULL);
 }

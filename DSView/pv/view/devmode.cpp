@@ -273,6 +273,7 @@ const struct dev_mode_name* DevMode::get_mode_name(int mode)
             return &o;
     }
     assert(false);
+    return nullptr;
 }
 
 void DevMode::UpdateLanguage()
